@@ -8,14 +8,29 @@ import copy
 
 
 def update_params(model, grads, lr):
-    flag = False
+    """Update params by gradient descent
+
+    Args:
+        model (nn.Module): a pytorch model
+        grads (list): a list of grads
+        lr (float): learning rate
+    """
     for idx, f in enumerate(model.parameters()):
         if grads[idx] is not None:
             f.data.sub_(lr * grads[idx])
-            flag = True
 
 
 def gnet_diff(g_loss_pre, g_loss_post):
+    """Difference between previous and current gnet losses: tanh(g_loss_pre, g_loss_post)
+    May use different functions such as subtraction, log, or crossentropy...
+
+    Args:
+        g_loss_pre (flaot): previous gnet loss
+        g_loss_post (float): current gnet loss
+
+    Returns:
+        diff (float): difference
+    """
     # diff = 100 * (g_loss_pre - g_loss_post)
     diff = torch.tanh(g_loss_post - g_loss_pre)
     # diff = torch.tanh(torch.nn.CrossEntropyLoss()(g_loss_pre, g_loss_post))
@@ -24,17 +39,32 @@ def gnet_diff(g_loss_pre, g_loss_post):
 
 
 class L2MTrainer(object):
-    def __init__(self, gnet, model, model_old, optimizer_m, optimizer_g, dataloaders, config, optimizer_old, max_iter=200000) -> None:
+    """Main training class
+    """
+
+    def __init__(self, gnet, model, model_old, optimizer_m, optimizer_g, dataloaders, config, max_iter=200000) -> None:
+        """Init func
+
+        Args:
+            gnet (GNet): gnet
+            model (model): model
+            model_old (old model): old model
+            optimizer_m (nn.optim): optimizer for optimizing L2M model
+            optimizer_g (nn.optim): optimizer for optimizing GNet
+            dataloaders (list): [source_train_loader, target_train_loader, target_test_loader]
+            config (dict): config dict
+            max_iter (int, optional): maximum iteration num. Defaults to 200000.
+        """
         self.gnet = gnet
         self.model = model
         self.model_old = model_old
         self.optimizer_m = optimizer_m
         self.optimizer_g = optimizer_g
-        self.optimizer_old = optimizer_old
         self.max_iter = max_iter
         self.train_source_loader, self.train_target_loader, self.test_target_loader = dataloaders
         self.config = config
         self.save_path = config.save_path
+        self.glr = config.glr
         self.lr_scheduler = INVScheduler(gamma=self.config.gamma,
                                          decay_rate=self.config.decay_rate,
                                          init_lr=self.config.init_lr)
@@ -48,12 +78,12 @@ class L2MTrainer(object):
         param_groups = self.model.get_parameter_list()
         group_ratios = [group['lr'] for group in param_groups]
         while True:
-            vlr = 0.001 * ((0.1 ** int(epoch >= 300))
-                           * (0.1 ** int(epoch >= 600)))
+            vlr = self.glr * ((0.1 ** int(epoch >= 300))
+                              * (0.1 ** int(epoch >= 600)))
             self.model_old.c_net.load_state_dict(self.model.c_net.state_dict())
             self.gnet.train()
-            self.model_old.set_train(True)
-            self.model.set_train(True)
+            self.model_old.c_net.train()
+            self.model.c_net.train()
             self.optimizer_g = torch.optim.Adam(
                 self.gnet.parameters(), lr=vlr)
 
@@ -91,8 +121,7 @@ class L2MTrainer(object):
                 m_feat = self.model.match_feat(
                     cond_loss, mar_loss, feat, logits)
                 with torch.no_grad():
-                    mv_lambda = self.gnet(m_feat[:m_feat.size(
-                        0) // 2].detach().data, m_feat[m_feat.size(0) // 2:].detach().data)
+                    mv_lambda = self.gnet(m_feat.detach().data)
                 loss = mv_lambda.mean()
                 total_loss = classifier_loss + loss
                 self.optimizer_m.zero_grad()
@@ -105,15 +134,13 @@ class L2MTrainer(object):
                     inputs_tmp, labels_source)
                 m_feat = self.model_old.match_feat(
                     cond_loss, mar_loss, feat, logits)
-                g_loss_pre = self.gnet(
-                    m_feat[:m_feat.size(0) // 2], m_feat[m_feat.size(0) // 2:]).mean()
+                g_loss_pre = self.gnet(m_feat).mean()
 
                 _, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(
                     inputs_tmp, labels_source)
                 m_feat2 = self.model.match_feat(
                     cond_loss2, mar_loss2, feat2, logits2)
-                g_loss_post = self.gnet(m_feat2[:m_feat2.size(
-                    0) // 2], m_feat2[m_feat2.size(0) // 2:]).mean()
+                g_loss_post = self.gnet(m_feat2).mean()
 
                 diff = gnet_diff(g_loss_pre, g_loss_post)
                 self.optimizer_g.zero_grad()
@@ -185,8 +212,7 @@ class INVScheduler(object):
 
 
 def get_softlabel(model, loader):
-    ori_train_state = model.is_train
-    model.set_train(False)
+    model.c_net.eval()
     first_test = True
     all_probs = None
     for datat in loader:
@@ -200,7 +226,7 @@ def get_softlabel(model, loader):
         else:
             all_probs = torch.cat((all_probs, probabilities), 0)
     prob, predict = torch.max(all_probs, 1)
-    model.set_train(ori_train_state)
+    model.c_net.train()
     return prob, predict
 
 
@@ -267,8 +293,7 @@ def set_require_grad(model, grad=True):
 
 
 def evaluate(model, input_loader, calcf1=False):
-    ori_train_state = model.is_train
-    model.set_train(False)
+    model.c_net.eval()
     num_iter = len(input_loader)
     iter_test = iter(input_loader)
     first_test = True
@@ -297,7 +322,7 @@ def evaluate(model, input_loader, calcf1=False):
         ret['metr'] = metr
     accuracy = torch.sum(torch.squeeze(predict).float() ==
                          all_labels).item() / float(all_labels.size()[0])
-    model.set_train(ori_train_state)
+    model.c_net.train()
     ret['accuracy'] = accuracy
     return ret
 

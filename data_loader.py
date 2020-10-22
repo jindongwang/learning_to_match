@@ -80,6 +80,18 @@ class myDataset(data.Dataset):
 
 
 def load_training(root_path, domain, batch_size, kwargs, train_val_split=.5):
+    """Load training dataloader
+
+    Args:
+        root_path (str): root path for dataset
+        domain (str): domain name
+        batch_size (int): batch size
+        kwargs (dict): other params
+        train_val_split (float, optional): train-valid split. '-1' means there's no validation set. Defaults to .5.
+
+    Returns:
+        dataloader
+    """
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     transform = transforms.Compose(
@@ -102,6 +114,17 @@ def load_training(root_path, domain, batch_size, kwargs, train_val_split=.5):
 
 
 def load_testing(root_path, domain, batch_size, kwargs):
+    """Load test dataloader
+
+    Args:
+        root_path (str): root path for dataset
+        domain (str): domain name
+        batch_size (int): batch size
+        kwargs (dict): other params
+
+    Returns:
+        dataloader
+    """
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     start_center = (256 - 224 - 1) / 2

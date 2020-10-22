@@ -5,7 +5,10 @@ import torch
 import numpy as np
 from utils import mmd
 
-
+'''
+Gradient reversal layer. Reference:
+Ganin et al. Unsupervised domain adaptation by backpropagation. ICML 2015.
+'''
 class GradientReverseLayer(torch.autograd.Function):
     def __init__(self, iter_num=0, alpha=1.0, low_value=0.0, high_value=0.1, max_iter=1000.0):
         self.iter_num = iter_num
@@ -25,109 +28,20 @@ class GradientReverseLayer(torch.autograd.Function):
                 self.high_value - self.low_value) + self.low_value)
         return -self.coeff * grad_output
 
-
-class PositiveLinear(nn.Linear):
-    def forward(self, input):
-        return F.linear(input, self.weight**2, self.bias)
-
-
-class MLP(nn.Module):
-    def __init__(self, n_input, n_hiddens, n_output, drop_out=0, mono=False):
-        super(MLP, self).__init__()
-        hidden = []
-        for layer in n_hiddens:
-            if mono:
-                hidden.append(PositiveLinear(n_input, layer))
-            else:
-                hidden.append(nn.Linear(n_input, layer))
-            hidden.append(nn.ReLU(inplace=True))
-            if drop_out != 0:
-                hidden.append(nn.Dropout(drop_out))
-            n_input = layer
-        self.hidden = nn.Sequential(*hidden)
-        if mono:
-            self.out = PositiveLinear(n_input, n_output)
-        else:
-            self.out = nn.Linear(n_input, n_output)
-        self.init_layers(mono=mono)
-
-    def forward(self, x):
-        x = self.hidden(x)
-        x = self.out(x)
-        return x
-
-    def init_layers(self, weight=0.01, bias=0, mono=False):
-        for layer in self.hidden:
-            if mono:
-                if isinstance(layer, PositiveLinear):
-                    layer.weight.data.normal_(0, weight)
-                    layer.bias.data.fill_(bias)
-            else:
-                if isinstance(layer, nn.Linear):
-                    layer.weight.data.normal_(0, weight)
-                    layer.bias.data.fill_(bias)
-        self.out.weight.data.normal_(0, weight)
-        self.out.bias.data.fill_(bias)
-
-
-class GNet(nn.Module):
-    def __init__(self, n_input, n_hiddens, n_output, use_set=True, drop_out=0, mono=False):
-        super(GNet, self).__init__()
-        net = MLP(n_input, n_hiddens, n_output, drop_out, mono=mono)
-        self.hidden = net.hidden
-        self.out = net.out
-        self.set = use_set
-        self.parameter_list = [{"params": self.hidden.parameters(), "lr": 0.1}, {
-            "params": self.out.parameters(), "lr": 0.1}]
-
-    def forward(self, x):
-        x = self.hidden(x)
-        if self.set:
-            x_s = torch.sum(x[:x.size(0) // 2], dim=0, keepdim=True)
-            x_t = torch.sum(x[x.size(0) // 2:], dim=0, keepdim=True)
-            x = torch.cat((x_s, x_t), dim=0)
-        x = self.out(x)
-        out = torch.sigmoid(x)
-        return out
-
-
-class GNet2(nn.Module):
-    def __init__(self, n_input, n_hiddens, n_output, use_set=True, drop_out=0, mono=False):
-        super(GNet2, self).__init__()
-        self.use_set = use_set
-        self.net_s = MLP(n_input, n_hiddens, n_output,
-                         drop_out=drop_out, mono=mono)
-        self.net_t = MLP(n_input, n_hiddens, n_output,
-                         drop_out=drop_out, mono=mono)
-        self.combine = nn.Sequential(
-            nn.Linear(1024, 1024),
-            nn.ReLU(inplace=True),
-            nn.Dropout(drop_out),
-            nn.Linear(1024, 512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(drop_out),
-            nn.Linear(512,256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(drop_out),
-            nn.Linear(256, 1)
-        )
-
-    def forward(self, x_src, x_tar):
-        # fea_src, fea_tar = F.relu(self.net_s(x_src)), F.relu(self.net_s(x_tar))
-        fea_src, fea_tar = x_src, x_tar
-        if self.use_set:
-            fea_src = torch.mean(fea_src, dim=0, keepdim=True)
-            fea_tar = torch.mean(fea_tar, dim=0, keepdim=True)
-        feas = fea_src - fea_tar
-        out = self.combine(feas)
-        # out = out * out.t()
-        # out = F.relu(out)
-        # out = torch.sigmoid(out)
-        return out
-
-
+'''
+L2M network.
+'''
 class L2MNet(nn.Module):
     def __init__(self, base_net='ResNet50', bottleneck_dim=2048, width=2048, class_num=31, use_adv=True):
+        """Init func
+
+        Args:
+            base_net (str, optional): backbone network. Defaults to 'ResNet50'.
+            bottleneck_dim (int, optional): bottleneck dim. Defaults to 2048.
+            width (int, optional): width for fc layer. Defaults to 2048.
+            class_num (int, optional): number of classes. Defaults to 31.
+            use_adv (bool, optional): use adversarial training or not. Defaults to True.
+        """
         super(L2MNet, self).__init__()
         self.use_adv = use_adv
         # set base network
@@ -167,6 +81,14 @@ class L2MNet(nn.Module):
                 {"params": self.domain_classifier.parameters(), "lr": 1})
 
     def forward(self, inputs):
+        """Forward func
+
+        Args:
+            inputs (2d-array): raw inputs for both source and target domains
+
+        Returns:
+            outputs
+        """
         features = self.base_network(inputs)
         features = self.bottleneck_layer(features)
         outputs_adv, domain_output = None, None
@@ -182,6 +104,15 @@ class L2MNet(nn.Module):
         return features, outputs, output_prob, outputs_adv, domain_output
 
     def predict(self, inputs):
+        """Prediction function
+
+        Args:
+            inputs (2d-array): raw input
+
+        Returns:
+            output_prob: probability
+            outputs: logits
+        """
         features = self.base_network(inputs)
         features = self.bottleneck_layer(features)
         outputs = self.classifier_layer(features)
@@ -190,6 +121,18 @@ class L2MNet(nn.Module):
 
 
 def mdd_loss(outputs, len_src, cls_adv, srcweight):
+    """Implement the MDD loss. Reference:
+    Zhang et al. Bridging theory and algorithm for domain adpatation. ICML 2019.
+
+    Args:
+        outputs (1d-array): logits
+        len_src (int): length of source domain data
+        cls_adv (1d-array): adversarial logits of two domains
+        srcweight (float): source domain weight for mdd loss
+
+    Returns:
+        loss (float): mdd loss
+    """
     class_criterion = torch.nn.CrossEntropyLoss()
     y_pred = outputs.max(1)[1]
     target_adv_src = y_pred[:len_src]
@@ -202,9 +145,24 @@ def mdd_loss(outputs, len_src, cls_adv, srcweight):
     loss = srcweight * classifier_loss_adv_src + classifier_loss_adv_tgt
     return loss
 
-
+'''
+Main L2M class that wraps L2MNet
+'''
 class L2M(object):
     def __init__(self, base_net='ResNet50', bottleneck_dim=2048, width=1024, class_num=31, srcweight=3, use_adv=True, match_feat_type=5, dataset='Office-Home', cat_feature='column'):
+        """Init func
+
+        Args:
+            base_net (str, optional): backbone network. Defaults to 'ResNet50'.
+            bottleneck_dim (int, optional): bottleneck dim. Defaults to 2048.
+            width (int, optional): width of the fc layer. Defaults to 1024.
+            class_num (int, optional): num of class. Defaults to 31.
+            srcweight (int, optional): source weight for mdd loss. Defaults to 3.
+            use_adv (bool, optional): use adversarial training or not. Defaults to True.
+            match_feat_type (int, optional): match feature type. Defaults to 5.
+            dataset (str, optional): which dataset you use. Defaults to 'Office-Home'.
+            cat_feature (str, optional): column or row to concat features. Defaults to 'column'.
+        """
         self.c_net = L2MNet(base_net, bottleneck_dim,
                             width, class_num, use_adv)
         self.is_train = False
@@ -219,6 +177,19 @@ class L2M(object):
         self.label_tar = None
 
     def get_loss(self, inputs, labels_source):
+        """Compute loss for L2M
+
+        Args:
+            inputs (matrix): a 2d-array containing both source and target domain features
+            labels_source (1d-array): source domain label
+
+        Returns:
+            classifier_loss: classification loss
+            cond_loss: conditional distribution matching loss
+            mar_loss: marginal distribution matching loss
+            feat: features
+            outputs: logits
+        """
         class_criterion = nn.CrossEntropyLoss()
         len_src, len_tar = labels_source.size(
             0), inputs.size(0) - labels_source.size(0)
@@ -245,6 +216,14 @@ class L2M(object):
         return classifier_loss, cond_loss, mar_loss, feat, outputs
 
     def predict(self, inputs):
+        """Prediction function
+
+        Args:
+            inputs (2d-array): raw inputs
+
+        Returns:
+            softmax_outputs
+        """
         _, _, softmax_outputs, _, _ = self.c_net(inputs)
         return softmax_outputs
 
@@ -254,6 +233,17 @@ class L2M(object):
         return self.c_net.parameter_list
 
     def match_feat(self, cond_loss, mar_loss, feat, logits):
+        """Generate matching features
+
+        Args:
+            cond_loss (float): conditional loss
+            mar_loss (float): marginal loss
+            feat (2d-array): feature matrix
+            logits (1d-aray): logits
+
+        Returns:
+            matching features
+        """
         if self.cat_feature == 'column':
             if self.match_feat_type == 0:  # feature
                 self.matched_feat = feat

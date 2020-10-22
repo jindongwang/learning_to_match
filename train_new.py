@@ -32,10 +32,11 @@ def pprint(*text):
 
 def load_data(root_path, source_dir, target_dir, batch_size):
     kwargs = {'num_workers': 4, 'pin_memory': True}
+    train_val_split = -1
     source_loader = data_loader.load_training(
-        root_path, source_dir, batch_size, kwargs)
+        root_path, source_dir, batch_size, kwargs, train_val_split)
     target_loader = data_loader.load_training(
-        root_path, target_dir, batch_size, kwargs)
+        root_path, target_dir, batch_size, kwargs, train_val_split)
     test_loader = data_loader.load_testing(
         root_path, target_dir, batch_size, kwargs)
     return source_loader, target_loader, test_loader
@@ -88,8 +89,8 @@ def init_gnet(width, class_num):
     elif args.match_feat_type == 6:
         input_gnet = width + 1
     assert (input_gnet != 0), 'GNet error!'
-    # gnet = GNet(input_gnet, [100], 1, use_set=False, drop_out=.5)
-    gnet = GNet2(input_gnet, [512, 256], 100, use_set=False, drop_out=.5)
+    gnet = GNet(input_gnet, [100, 100], 1, use_set=False, drop_out=.5)
+    # gnet = GNet2(input_gnet, [512, 256], 100, use_set=False, drop_out=.5)
     return gnet
 
 
@@ -118,7 +119,7 @@ def get_args():
     parser.add_argument('--save_folder', type=str, default='outputs')
     parser.add_argument('--use_adv', type=str2bool,
                         nargs='?', const=True, default=False)
-    parser.add_argument('--match_feat_type', type=int, default=5,
+    parser.add_argument('--match_feat_type', type=int, default=0,
                         help="""0: feature;
                                 1: logits;
                                 2: conditional loss + marginal loss;
@@ -126,6 +127,8 @@ def get_args():
                                 4: logits + conditional loss + marginal loss
                                 5: logits + feature + cond + marg loss (ALL)""")
     parser.add_argument('--init_lr', type=float, default=0.004)
+    parser.add_argument('--glr', type=float, default=0.01,
+                        help='learning rate for gnet')
     parser.add_argument('--gamma', type=float, default=0.001)
     parser.add_argument('--decay_rate', type=float, default=0.75)
     parser.add_argument('--momentum', type=float, default=0.9)
@@ -169,8 +172,10 @@ if __name__ == '__main__':
     gnet = gnet.cuda()
     assist_model.c_net = assist_model.c_net.cuda()
     assist_model_old.c_net = assist_model_old.c_net.cuda()
+
+    # controls multi-gpu training
     if args.multi_gpu:
-        device_ids = ['1', '2']
+        device_ids = ['0', '1']
         gnet = torch.nn.DataParallel(gnet, device_ids)
         assist_model.c_net = torch.nn.DataParallel(
             assist_model.c_net, device_ids)
@@ -199,5 +204,5 @@ if __name__ == '__main__':
                                     nesterov=args.nesterov)
 
     trainer = L2MTrainer(gnet, assist_model, assist_model_old,
-                         optimizer, None, dataloaders, args, optimizer_old)
+                         optimizer, optimizer_old, dataloaders, args)
     trainer.train()

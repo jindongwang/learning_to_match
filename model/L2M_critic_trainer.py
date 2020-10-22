@@ -8,8 +8,6 @@ from utils.visualize import Visualize
 import copy
 import data_loader
 from model import L2M
-import math
-import itertools
 
 
 def update_params(model, grads, lr):
