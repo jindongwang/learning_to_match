@@ -1,13 +1,13 @@
 # Learning to Match Distributions for Domain Adaptation 
 
-This repository is the official implementation of [Learning to Match Distributions for Domain Adaptation](https://arxiv.org/abs/xxxx). 
+This repository is the official implementation of [Learning to Match Distributions for Domain Adaptation](https://arxiv.org/abs/2007.10791). 
 
 ## Requirements
 
 We recommend that you use a conda virtual environment to run the following experiments .
 
 Environments:  
-* Python3
+* Python 3
 * PyTorch == 1.0.0 (with suitable CUDA and CuDNN version)
 * torchvision == 0.2.1
 
@@ -32,6 +32,15 @@ You need to download the datasets ([Office-Home](https://drive.google.com/file/d
 |__RealWorld
 ```
 
+## Training
+
+There are two alternatives for training:
+- `train_new.py`, along with `model/L2M_trainer.py`: exactly follow the L2M paper.
+- `train_critic.py`, along with `model/L2M_critic_trainer.py`: a critic way of training by following this [paper](https://arxiv.org/abs/1901.11448) and their [code](https://github.com/liyiying/Feature_Critic).
+
+*The following are not useful anymore.*
+
+- - -
 
 ## Training
 
