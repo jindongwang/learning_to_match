@@ -103,7 +103,7 @@ def get_args():
         else:
             raise argparse.ArgumentTypeError('Unsupported value encountered.')
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--dataset', default='Office-Home', type=str,
                         help='which dataset')
     parser.add_argument('--seed', type=int, default=3, metavar='S',
@@ -119,7 +119,7 @@ def get_args():
     parser.add_argument('--save_folder', type=str, default='outputs')
     parser.add_argument('--use_adv', type=str2bool,
                         nargs='?', const=True, default=False)
-    parser.add_argument('--match_feat_type', type=int, default=0,
+    parser.add_argument('--match_feat_type', type=int, default=0, choices=[0,1,2,3,4,5],
                         help="""0: feature;
                                 1: logits;
                                 2: conditional loss + marginal loss;
@@ -138,7 +138,7 @@ def get_args():
     parser.add_argument('--cat_feature', type=str, default='column')
     parser.add_argument('--multi_gpu', type=str2bool,
                         nargs='?', const=True, default=False)
-    parser.add_argument('--early_stop', type=int, default=50)
+    parser.add_argument('--early_stop', type=int, default=30)
 
     args = parser.parse_args()
     return args
@@ -149,13 +149,15 @@ if __name__ == '__main__':
     class_num, width, srcweight, is_cen = get_data_config(args.dataset)
     assert (class_num != -1), 'Dataset name error!'
     assert (args.match_feat_type <= 6), 'option match_feat_type error!'
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+
+    # controls random seed
+    # np.random.seed(args.seed)
+    # torch.manual_seed(args.seed)
+    # random.seed(args.seed)
+    # torch.cuda.manual_seed(args.seed)
+    # torch.cuda.manual_seed_all(args.seed)
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
 
     args.save_path = os.path.join(args.save_folder, args.save_path)
     args.log_file = args.save_path.replace('.mdl', '.log')

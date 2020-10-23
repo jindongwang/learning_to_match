@@ -109,7 +109,7 @@ class L2MTrainer(object):
                     meta_data, meta_label = iter_meta.next()
                 meta_data, meta_label = meta_data.cuda(), meta_label.cuda()
 
-                self.optimizer_m, lr = self.lr_scheduler.next_optimizer(
+                self.optimizer_m, _ = self.lr_scheduler.next_optimizer(
                     group_ratios, self.optimizer_m, iter_num/5)
                 inputs_source, inputs_target, labels_source = inputs_source.cuda(
                 ), inputs_target.cuda(), labels_source.cuda()

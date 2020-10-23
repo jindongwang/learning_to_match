@@ -32,6 +32,15 @@ You need to download the datasets ([Office-Home](https://drive.google.com/file/d
 |__RealWorld
 ```
 
+### Download dataset from GCR!
+
+In a GCR machine, all you need to do is use the following command to download the datasets.
+
+- Office31: `azcopy --source "https://transferlearningdrive.blob.core.windows.net/teamdrive/dataset/office31/" --destination "data/office31" --recursive`
+- Office-Home: `azcopy --source "https://transferlearningdrive.blob.core.windows.net/teamdrive/dataset/OfficeHome/" --destination "data/OfficeHome" --recursive`
+- ImageCLEF-DA: `azcopy --source "https://transferlearningdrive.blob.core.windows.net/teamdrive/dataset/image_CLEF/" --destination "data/image_CLEF" --recursive`
+- VisDA: `azcopy --source "https://transferlearningdrive.blob.core.windows.net/teamdrive/dataset/visda/" --destination "data/visda" --recursive`
+
 ## Training
 
 There are two alternatives for training:
