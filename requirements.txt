@@ -1,11 +1,10 @@
-numpy
-pillow==6.1.0
+torch
+torchvision
+pillow
 scikit-image
 scikit-learn
 argparse
 tqdm
 IPython
 pretty_errors
-torch==1.0.0
-torchvision==0.2.1
 visdom

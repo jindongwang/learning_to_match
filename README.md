@@ -6,10 +6,7 @@ This repository is the official implementation of [Learning to Match Distributio
 
 We recommend that you use a conda virtual environment to run the following experiments .
 
-Environments:  
-* Python 3
-* PyTorch == 1.0.0 (with suitable CUDA and CuDNN version)
-* torchvision == 0.2.1
+Basic environment is pytorch > 1.0.
 
 To install requirements:  
 ```setup
@@ -34,7 +31,7 @@ You need to download the datasets ([Office-Home](https://drive.google.com/file/d
 
 ### Download dataset from GCR!
 
-In a GCR machine, all you need to do is use the following command to download the datasets.
+In a GCR machine at Microsoft, all you need to do is use the following command to download the datasets.
 
 - Office31: `azcopy --source "https://transferlearningdrive.blob.core.windows.net/teamdrive/dataset/office31/" --destination "data/office31" --recursive`
 - Office-Home: `azcopy --source "https://transferlearningdrive.blob.core.windows.net/teamdrive/dataset/OfficeHome/" --destination "data/OfficeHome" --recursive`

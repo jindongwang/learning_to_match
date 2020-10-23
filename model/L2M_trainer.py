@@ -78,14 +78,14 @@ class L2MTrainer(object):
         param_groups = self.model.get_parameter_list()
         group_ratios = [group['lr'] for group in param_groups]
         while True:
-            vlr = self.glr * ((0.1 ** int(epoch >= 300))
+            glr = self.glr * ((0.1 ** int(epoch >= 300))
                               * (0.1 ** int(epoch >= 600)))
             self.model_old.c_net.load_state_dict(self.model.c_net.state_dict())
             self.gnet.train()
             self.model_old.c_net.train()
             self.model.c_net.train()
             self.optimizer_g = torch.optim.Adam(
-                self.gnet.parameters(), lr=vlr)
+                self.gnet.parameters(), lr=glr)
 
             # construct meta_loader from target_loader before each epoch
             if epoch == 0:
@@ -97,18 +97,13 @@ class L2MTrainer(object):
 
             iter_meta = iter(meta_loader)
             lst_cls, lst_val = [], []
+            inputs_source, labels_source = None, None
             for (datas, datat) in zip(self.train_source_loader, self.train_target_loader):
                 inputs_source, labels_source = datas
                 inputs_target, _ = datat
                 if inputs_source.size(0) != inputs_target.size(0):
                     continue
-                try:
-                    meta_data, meta_label = iter_meta.next()
-                except:
-                    iter_meta = iter(meta_loader)
-                    meta_data, meta_label = iter_meta.next()
-                meta_data, meta_label = meta_data.cuda(), meta_label.cuda()
-
+                
                 self.optimizer_m, _ = self.lr_scheduler.next_optimizer(
                     group_ratios, self.optimizer_m, iter_num/5)
                 inputs_source, inputs_target, labels_source = inputs_source.cuda(
@@ -127,30 +122,37 @@ class L2MTrainer(object):
                 self.optimizer_m.zero_grad()
                 total_loss.backward()
                 self.optimizer_m.step()
-
-                # diff_g = self.update_theta(inputs_source, meta_data, labels_source, total_loss, classifier_loss, laux)
-                inputs_tmp = torch.cat((inputs_source, meta_data), dim=0)
-                _, cond_loss, mar_loss, feat, logits = self.model_old.get_loss(
-                    inputs_tmp, labels_source)
-                m_feat = self.model_old.match_feat(
-                    cond_loss, mar_loss, feat, logits)
-                g_loss_pre = self.gnet(m_feat).mean()
-
-                _, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(
-                    inputs_tmp, labels_source)
-                m_feat2 = self.model.match_feat(
-                    cond_loss2, mar_loss2, feat2, logits2)
-                g_loss_post = self.gnet(m_feat2).mean()
-
-                diff = gnet_diff(g_loss_pre, g_loss_post)
-                self.optimizer_g.zero_grad()
-                diff.backward()
-                self.optimizer_g.step()
-                # diff_g = torch.tensor(0)
-
                 lst_cls.append(classifier_loss.item())
-                lst_val.append(diff.item())
                 iter_num += 1
+            
+
+            try:
+                meta_data, meta_label = iter_meta.next()
+            except:
+                iter_meta = iter(meta_loader)
+                meta_data, meta_label = iter_meta.next()
+            meta_data, meta_label = meta_data.cuda(), meta_label.cuda()
+            inputs_tmp = torch.cat((inputs_source, meta_data), dim=0)
+            _, cond_loss, mar_loss, feat, logits = self.model_old.get_loss(
+                inputs_tmp, labels_source)
+            m_feat = self.model_old.match_feat(
+                cond_loss, mar_loss, feat, logits)
+            g_loss_pre = self.gnet(m_feat).mean()
+
+            _, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(
+                inputs_tmp, labels_source)
+            m_feat2 = self.model.match_feat(
+                cond_loss2, mar_loss2, feat2, logits2)
+            g_loss_post = self.gnet(m_feat2).mean()
+
+            diff = gnet_diff(g_loss_pre, g_loss_post)
+            self.optimizer_g.zero_grad()
+            diff.backward()
+            self.optimizer_g.step()
+
+            
+            lst_val.append(diff.item())
+            
             # print(self.model.c_net.classifier_layer[0].weight.grad.sum())
             # print(self.gnet.out.weight.grad.sum())
             stop += 1

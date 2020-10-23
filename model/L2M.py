@@ -2,31 +2,9 @@ import torch.nn as nn
 import model.backbone as backbone
 import torch.nn.functional as F
 import torch
-import numpy as np
 from utils import mmd
-
-'''
-Gradient reversal layer. Reference:
-Ganin et al. Unsupervised domain adaptation by backpropagation. ICML 2015.
-'''
-class GradientReverseLayer(torch.autograd.Function):
-    def __init__(self, iter_num=0, alpha=1.0, low_value=0.0, high_value=0.1, max_iter=1000.0):
-        self.iter_num = iter_num
-        self.alpha = alpha
-        self.low_value = low_value
-        self.high_value = high_value
-        self.max_iter = max_iter
-
-    def forward(self, input):
-        self.iter_num += 1
-        output = input * 1.0
-        return output
-
-    def backward(self, grad_output):
-        self.coeff = np.float(
-            2.0 * (self.high_value - self.low_value) / (1.0 + np.exp(-self.alpha * self.iter_num / self.max_iter)) - (
-                self.high_value - self.low_value) + self.low_value)
-        return -self.coeff * grad_output
+from model.grl import GradReverse
+from model.mlp import MLP
 
 '''
 L2M network.
@@ -68,7 +46,7 @@ class L2MNet(nn.Module):
                                {"params": self.classifier_layer.parameters(), "lr": 1}]
 
         if self.use_adv:
-            self.grl_layer = GradientReverseLayer()
+            # self.grl_layer = GradReverse()
             self.classifier_layer_2 = MLP(
                 bottleneck_dim, [width], class_num, drop_out=.5)
             # DANN: add DANN, make L2M not only class-invariant (as conditional loss) but also domain invariant (as marginal loss)
@@ -94,7 +72,8 @@ class L2MNet(nn.Module):
         outputs_adv, domain_output = None, None
 
         if self.use_adv:
-            features_adv = self.grl_layer(features)
+            # features_adv = self.grl_layer(features)
+            features_adv = GradReverse.apply(features, 1)
             domain_output = torch.sigmoid(self.domain_classifier(features_adv))
             outputs_adv = self.classifier_layer_2(features_adv)
 
