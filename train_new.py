@@ -89,7 +89,7 @@ def init_gnet(width, class_num):
     elif args.match_feat_type == 6:
         input_gnet = width + 1
     assert (input_gnet != 0), 'GNet error!'
-    gnet = GNet(input_gnet, [100, 100], 1, use_set=False, drop_out=.5)
+    gnet = GNet(input_gnet, [100, 100], 1, use_set=False, drop_out=.5, mono=True)
     # gnet = GNet2(input_gnet, [512, 256], 100, use_set=False, drop_out=.5)
     return gnet
 

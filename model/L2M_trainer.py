@@ -60,11 +60,16 @@ class L2MTrainer(object):
         self.model_old = model_old
         self.optimizer_m = optimizer_m
         self.optimizer_g = optimizer_g
+        self.glr = config.glr
+        # glr = self.glr * ((0.1 ** int(epoch >= 300))
+        #                       * (0.1 ** int(epoch >= 600)))
+        self.optimizer_g = torch.optim.SGD(
+                self.gnet.parameters(), lr=self.glr)
         self.max_iter = max_iter
         self.train_source_loader, self.train_target_loader, self.test_target_loader = dataloaders
         self.config = config
         self.save_path = config.save_path
-        self.glr = config.glr
+        
         self.lr_scheduler = INVScheduler(gamma=self.config.gamma,
                                          decay_rate=self.config.decay_rate,
                                          init_lr=self.config.init_lr)
@@ -78,15 +83,12 @@ class L2MTrainer(object):
         param_groups = self.model.get_parameter_list()
         group_ratios = [group['lr'] for group in param_groups]
         while True:
-            glr = self.glr * ((0.1 ** int(epoch >= 300))
-                              * (0.1 ** int(epoch >= 600)))
+            
             self.model_old.c_net.load_state_dict(self.model.c_net.state_dict())
             self.gnet.train()
             self.model_old.c_net.train()
             self.model.c_net.train()
-            self.optimizer_g = torch.optim.Adam(
-                self.gnet.parameters(), lr=glr)
-
+            
             # construct meta_loader from target_loader before each epoch
             if epoch == 0:
                 meta_loader = generate_metadata(
@@ -115,8 +117,8 @@ class L2MTrainer(object):
                     inputs, labels_source)
                 m_feat = self.model.match_feat(
                     cond_loss, mar_loss, feat, logits)
-                with torch.no_grad():
-                    mv_lambda = self.gnet(m_feat.detach().data)
+                
+                mv_lambda = self.gnet(m_feat.detach().data)
                 loss = mv_lambda.mean()
                 total_loss = classifier_loss + loss
                 self.optimizer_m.zero_grad()
