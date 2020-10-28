@@ -7,7 +7,6 @@ from utils.utils_f1 import metric
 from utils.visualize import Visualize
 import copy
 import data_loader
-from model import L2M
 
 
 def update_params(model, grads, lr):
@@ -57,7 +56,7 @@ class L2MTrainerCritic(object):
             self.group_ratios, self.optimizer_m, 1)
 
         for epoch in range(pretrain_epoch):
-            self.model.c_net.train()
+            self.model.net.train()
             for _, (x_src, y_src) in enumerate(self.train_source_loader_train):
                 x_src, y_src = x_src.cuda(), y_src.cuda()
                 inputs = torch.cat([x_src, x_src], dim=0)
@@ -65,15 +64,15 @@ class L2MTrainerCritic(object):
                 self.optimizer_m.zero_grad()
                 loss_cls.backward()
                 self.optimizer_m.step()
-            ret = self.evaluate(self.model.c_net, self.train_source_loader_val)
+            ret = self.evaluate(self.model.net, self.train_source_loader_val)
             acc = ret['f1'] if self.config.dataset == 'Covid-19' else ret['accuracy']
-            ret = self.evaluate(self.model.c_net, self.test_target_loader)
+            ret = self.evaluate(self.model.net, self.test_target_loader)
             acc_tar = ret['f1'] if self.config.dataset == 'Covid-19' else ret['accuracy']
             self.pprint('Epoch: {:2d}, acc src: {:.4f}, acc tar: {:.4f}'.format(
                 epoch, acc, acc_tar))
             if best_acc < acc:
                 best_acc = acc
-                torch.save(self.model.c_net.state_dict(),
+                torch.save(self.model.net.state_dict(),
                            self.save_path.replace('.mdl', '-pre.mdl'))
         self.pprint('Best pretrain model saved!')
 
@@ -92,7 +91,7 @@ class L2MTrainerCritic(object):
             losses = []
             self.optimizer_m, lr = self.lr_scheduler.next_optimizer(
                 self.group_ratios, self.optimizer_m, 1)
-            self.model.c_net.train()
+            self.model.net.train()
             for datas, datat in zip(self.train_source_loader_train, self.train_target_loader_train):
                 (x_src, y_src), (x_tar, _) = datas, datat
                 x_src, y_src = x_src.cuda(), y_src.cuda()
@@ -106,162 +105,163 @@ class L2MTrainerCritic(object):
                 self.optimizer_m.step()
                 losses.append([loss_cls.item(), cond_loss.item()])
             losses = np.array(losses).mean(0)
-            ret = self.evaluate(self.model.c_net, self.train_source_loader_val)
+            ret = self.evaluate(self.model.net, self.train_source_loader_val)
             acc = ret['f1'] if self.config.dataset == 'Covid-19' else ret['accuracy']
-            ret = self.evaluate(self.model.c_net, self.test_target_loader)
+            ret = self.evaluate(self.model.net, self.test_target_loader)
             acc_tar = ret['f1'] if self.config.dataset == 'Covid-19' else ret['accuracy']
             self.pprint('Epoch: {:2d}, acc src: {:.4f}, acc tar: {:.4f}, lr: {:.4f}'.format(
                 epoch, acc, acc_tar, lr))
             print(losses)
             if best_acc < acc:
                 best_acc = acc
-                torch.save(self.model.c_net.state_dict(),
+                torch.save(self.model.net.state_dict(),
                            self.save_path.replace('.mdl', '-pre.mdl'))
         self.pprint('Best pretrain model saved!')
 
     def train(self):
-        if self.config.pretrain:
-            self.pretrain_src()
-        self.model.c_net.load_state_dict(torch.load(
-            self.save_path.replace('.mdl', '-pre.mdl')))
-        ret = self.evaluate(self.model.c_net, self.test_target_loader)
-        acc = ret['accuracy']
-        self.pprint('Pretrain acc: {:.4f}'.format(acc))
-        self.pprint('Start train...')
-        self.train_source_loader_train, self.train_source_loader_val = self.train_source_loader
-        self.train_target_loader_train, self.train_target_loader_val = self.train_target_loader
-        self.optimizer_g = torch.optim.SGD(
-            self.gnet.parameters(), lr=self.config.glr, momentum=.9, weight_decay=self.config.weight_decay)
-        iter_num = 0
-        epoch = 0
-        stop = 0
-        mxacc = 0
-        lst_cls_loss, lst_gloss, lst_meta_loss = [], [], []
-        batch_val = gen_batch(self.train_source_loader_val,
-                              self.train_target_loader_val)
-        while iter_num < self.max_iter:
-            self.model_old.c_net.load_state_dict(self.model.c_net.state_dict())
-            loss_train = torch.tensor(0, device='cuda')
-            loss_aug = torch.tensor(0, device='cuda')
-            self.model.c_net.train()
-            self.model_old.c_net.train()
-            self.gnet.train()
-            self.optimizer_m, lr = self.lr_scheduler.next_optimizer(
-                self.group_ratios, self.optimizer_m, iter_num)
-            # Meta train
-            batch_src, batch_tar = gen_batch(
-                self.train_source_loader_train, self.train_target_loader_train, n_batch=1)
-            _, (x_src, y_src) = batch_src
-            _, (x_tar, _) = batch_tar
-            x_src = torch.tensor(
-                x_src, dtype=torch.float32, device='cuda', requires_grad=False)
-            x_tar = torch.tensor(
-                x_tar, dtype=torch.float32, device='cuda', requires_grad=False)
-            y_src = torch.tensor(
-                y_src, dtype=torch.long, device='cuda', requires_grad=False)
-            inputs = torch.cat([x_src, x_tar], dim=0)
-            loss_cls, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(
-                inputs, y_src)
-            loss_train = loss_train + loss_cls
-            feat2 = self.model.match_feat(
-                cond_loss2, mar_loss2, feat2, logits2)
-            g_loss = self.gnet(feat2[:feat2.size(0) // 2],
-                               feat2[feat2.size(0) // 2:]).mean()
-            loss_aug = loss_aug + 0.1 * g_loss
-            lst_cls_loss.append(loss_cls.item())
-            lst_gloss.append(g_loss.item())
-            self.vis.plot_line([g_loss.item()], iter_num, title='gloss')
-
-            # Compute gradient
-            self.optimizer_m.zero_grad()
-            # Get grad for OLD loss
-            loss_train.backward(retain_graph=True)
-            grad_phi = get_grad(self.model.c_net)
-            update_params(self.model_old.c_net, grad_phi, lr)
-
-            # Get grad for NEW loss
-            loss_aug.backward(create_graph=True)
-            grad_phi = get_grad(self.model.c_net)
-            update_params(self.model.c_net, grad_phi, lr)
-
-            self.model.c_net.train()
-            self.model_old.c_net.train()
-
-            # Meta test
-            loss_meta_all = 0.0
-            _, (x_src, y_src) = batch_val[0]
-            _, (x_tar, y_tar) = batch_val[1]
-            x_src = torch.tensor(
-                x_src, dtype=torch.float32, device='cuda', requires_grad=False)
-            x_tar = torch.tensor(
-                x_tar, dtype=torch.float32, device='cuda', requires_grad=False)
-            y_src = torch.tensor(
-                y_src, dtype=torch.long, device='cuda', requires_grad=False)
-            y_tar = torch.tensor(
-                y_tar, dtype=torch.long, device='cuda', requires_grad=False)
-            inputs_tmp = torch.cat((x_tar, x_src), dim=0)
-            cls_loss1, cond_loss1, mar_loss1, feat1, logits1 = self.model_old.get_loss(
-                inputs_tmp, y_tar)
-            cls_loss2, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(
-                inputs_tmp, y_tar)
-            g_loss1 = self.gnet(
-                feat1[:feat1.size(0) // 2], feat1[feat1.size(0) // 2:]).mean()
-            g_loss2 = self.gnet(
-                feat2[:feat2.size(0) // 2], feat2[feat2.size(0) // 2:]).mean()
-            self.vis.plot_line([mar_loss1.item(), mar_loss2.item(
-            )], iter_num, title='MMD loss', legend=['OLD', 'NEW'])
-            self.vis.plot_line([g_loss1.item(), g_loss2.item()],
-                               iter_num, title='Aug loss', legend=['OLD', 'NEW'])
-            loss_meta = gnet_diff(g_loss1, g_loss2)
-            loss_meta_all += loss_meta
-            lst_meta_loss.append(loss_meta.item())
-            iter_num += 1
-
-            self.optimizer_m.step()
-            self.optimizer_g.zero_grad()
-            loss_meta_all.backward()
-            torch.nn.utils.clip_grad_norm_(self.gnet.parameters(), 5)
-            self.optimizer_g.step()
-            torch.cuda.empty_cache()
-
-            if iter_num % 30 == 0:
-                stop += 1
-                calcf1 = True if self.config.dataset == 'Covid-19' else False
-                ret = self.evaluate(self.model.c_net, self.test_target_loader)
-                acc = ret['accuracy']
-                self.vis.plot_line(
-                    [acc], epoch, 'Acc on target', legend=['Tar'])
-                if acc >= mxacc:
-                    stop = 0
-                    mxacc = acc
-                    torch.save(self.model.c_net.state_dict(), self.save_path)
-                if not calcf1:
-                    self.pprint('\nEpoch:[{:.0f}({:.2f}%)], cls_loss: {:.5f}, g_loss: {:.6f}, diff: {:.6f}, acc:{:.4f}, mxacc:{:.4f}'.format(
-                        epoch, float(iter_num) * 100. / self.max_iter, np.array(lst_cls_loss).mean(), np.array(lst_gloss).mean(), np.array(lst_meta_loss).mean(), acc, mxacc))
-                    self.vis.plot_line([np.array(lst_cls_loss).mean(), np.array(lst_gloss).mean(), np.array(
-                        lst_meta_loss).mean()], epoch, title='Loss', legend=['cls', 'gnet', 'val'])
-                else:
-                    self.pprint('\nEpoch:[{:.0f}/({:.2f}%)], acc: {:.4f}, mxacc: {:.4f}'.format(
-                        epoch, float(iter_num) * 100. / self.max_iter, ret['accuracy'], mxacc))
-                    self.pprint(ret['metr'])
-                epoch += 1
+        with torch.autograd.set_detect_anomaly(True):
+            if self.config.pretrain:
+                self.pretrain_src()
+            self.model.net.load_state_dict(torch.load(
+                self.save_path.replace('.mdl', '-pre.mdl')))
+            ret = self.evaluate(self.model.net, self.test_target_loader)
+            acc = ret['accuracy']
+            self.pprint(f'Pretrain acc: {acc:.4f}')
+            self.pprint('Start train...')
+            self.train_source_loader_train, self.train_source_loader_val = self.train_source_loader
+            self.train_target_loader_train, self.train_target_loader_val = self.train_target_loader
+            self.optimizer_g = torch.optim.SGD(
+                self.gnet.parameters(), lr=self.config.glr, momentum=.9, weight_decay=self.config.weight_decay)
+            iter_num = 0
+            epoch = 0
+            stop = 0
+            mxacc = 0
             lst_cls_loss, lst_gloss, lst_meta_loss = [], [], []
+            batch_val = gen_batch(self.train_source_loader_val,
+                                self.train_target_loader_val)
+            while iter_num < self.max_iter:
+                self.model_old.net.load_state_dict(self.model.net.state_dict())
+                loss_train = torch.tensor(0, device='cuda')
+                loss_aug1 = torch.tensor(0, device='cuda')
+                self.model.net.train()
+                self.model_old.net.train()
+                self.gnet.train()
+                self.optimizer_m, lr = self.lr_scheduler.next_optimizer(
+                    self.group_ratios, self.optimizer_m, iter_num)
 
-            # Reload data every 10 epochs
-            if epoch > 0 and epoch % 2 == 0:
-                np.random.seed(self.config.seed + 1)
-                kwargs = {'num_workers': 1, 'pin_memory': True}
-                val_split = .1
-                self.train_source_loader = data_loader.load_training(
-                    self.config.root_path, self.config.source_dir, self.config.batch_size, kwargs, train_val_split=val_split)
-                self.train_target_loader = data_loader.load_training(
-                    self.config.root_path, self.config.test_dir, self.config.batch_size, kwargs, train_val_split=val_split)
-                batch_val = gen_batch(
-                    self.train_source_loader_val, self.train_target_loader_val)
+                # Meta train
+                batch_src, batch_tar = gen_batch(
+                    self.train_source_loader_train, self.train_target_loader_train, n_batch=1)
+                _, (x_src, y_src) = batch_src
+                _, (x_tar, _) = batch_tar
+                x_src = torch.tensor(
+                    x_src, dtype=torch.float32, device='cuda', requires_grad=False)
+                x_tar = torch.tensor(
+                    x_tar, dtype=torch.float32, device='cuda', requires_grad=False)
+                y_src = torch.tensor(
+                    y_src, dtype=torch.long, device='cuda', requires_grad=False)
+                inputs = torch.cat([x_src, x_tar], dim=0)
+                loss_cls, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(
+                    inputs, y_src)
+                loss_train = loss_train + loss_cls
+                feat2 = self.model.match_feat(
+                    cond_loss2, mar_loss2, feat2, logits2)
+                g_loss = self.gnet(feat2).mean()
+                loss_aug = loss_aug1 + 0.1 * g_loss
+                lst_cls_loss.append(loss_cls.item())
+                lst_gloss.append(g_loss.item())
+                self.vis.plot_line([g_loss.item()], iter_num, title='gloss')
 
-            if stop >= self.config.early_stop:
-                self.pprint('=================Early stop!!')
-                break
+                # Compute gradient
+                self.optimizer_m.zero_grad()
+                # Get grad for OLD loss
+                loss_train.backward(retain_graph=True)
+                grad_phi = get_grad(self.model.net)
+                update_params(self.model_old.net, grad_phi, lr)
+
+                # Get grad for NEW loss
+                loss_aug.backward(create_graph=True)
+                grad_phi = get_grad(self.model.net)
+                update_params(self.model.net, grad_phi, lr)
+
+                self.model.net.train()
+                self.model_old.net.train()
+
+                # Meta test
+                loss_meta_all = 0.0
+                _, (x_src, y_src) = batch_val[0]
+                _, (x_tar, y_tar) = batch_val[1]
+                x_src = torch.tensor(
+                    x_src, dtype=torch.float32, device='cuda', requires_grad=False)
+                x_tar = torch.tensor(
+                    x_tar, dtype=torch.float32, device='cuda', requires_grad=False)
+                y_src = torch.tensor(
+                    y_src, dtype=torch.long, device='cuda', requires_grad=False)
+                y_tar = torch.tensor(
+                    y_tar, dtype=torch.long, device='cuda', requires_grad=False)
+                inputs_tmp = torch.cat((x_tar, x_src), dim=0)
+                cls_loss1, cond_loss1, mar_loss1, feat1, logits1 = self.model_old.get_loss(
+                    inputs_tmp, y_tar)
+                cls_loss2, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(
+                    inputs_tmp, y_tar)
+                g_loss1 = self.gnet(feat1)
+                g_loss2 = self.gnet(feat2)
+                self.vis.plot_line([mar_loss1.item(), mar_loss2.item(
+                )], iter_num, title='MMD loss', legend=['OLD', 'NEW'])
+                self.vis.plot_line([g_loss1.item(), g_loss2.item()],
+                                iter_num, title='Aug loss', legend=['OLD', 'NEW'])
+                loss_meta = gnet_diff(g_loss1, g_loss2)
+                loss_meta_all = loss_meta + loss_meta_all
+                lst_meta_loss.append(loss_meta.item())
+                iter_num += 1
+
+                self.optimizer_m.step()
+                self.optimizer_g.zero_grad()
+                print('x')
+                loss_meta_all.backward()
+                print('x')
+                torch.nn.utils.clip_grad_norm_(self.gnet.parameters(), 5)
+                self.optimizer_g.step()
+                torch.cuda.empty_cache()
+
+                if iter_num % 30 == 0:
+                    stop += 1
+                    calcf1 = True if self.config.dataset == 'Covid-19' else False
+                    ret = self.evaluate(self.model.net, self.test_target_loader)
+                    acc = ret['accuracy']
+                    self.vis.plot_line(
+                        [acc], epoch, 'Acc on target', legend=['Tar'])
+                    if acc >= mxacc:
+                        stop = 0
+                        mxacc = acc
+                        torch.save(self.model.net.state_dict(), self.save_path)
+                    if not calcf1:
+                        self.pprint('\nEpoch:[{:.0f}({:.2f}%)], cls_loss: {:.5f}, g_loss: {:.6f}, diff: {:.6f}, acc:{:.4f}, mxacc:{:.4f}'.format(
+                            epoch, float(iter_num) * 100. / self.max_iter, np.array(lst_cls_loss).mean(), np.array(lst_gloss).mean(), np.array(lst_meta_loss).mean(), acc, mxacc))
+                        self.vis.plot_line([np.array(lst_cls_loss).mean(), np.array(lst_gloss).mean(), np.array(
+                            lst_meta_loss).mean()], epoch, title='Loss', legend=['cls', 'gnet', 'val'])
+                    else:
+                        self.pprint('\nEpoch:[{:.0f}/({:.2f}%)], acc: {:.4f}, mxacc: {:.4f}'.format(
+                            epoch, float(iter_num) * 100. / self.max_iter, ret['accuracy'], mxacc))
+                        self.pprint(ret['metr'])
+                    epoch += 1
+                lst_cls_loss, lst_gloss, lst_meta_loss = [], [], []
+
+                # Reload data every 10 epochs
+                if epoch > 0 and epoch % 2 == 0:
+                    np.random.seed(self.config.seed + 1)
+                    kwargs = {'num_workers': 1, 'pin_memory': True}
+                    val_split = .1
+                    self.train_source_loader = data_loader.load_training(
+                        self.config.root_path, self.config.source_dir, self.config.batch_size, kwargs, train_val_split=val_split)
+                    self.train_target_loader = data_loader.load_training(
+                        self.config.root_path, self.config.test_dir, self.config.batch_size, kwargs, train_val_split=val_split)
+                    batch_val = gen_batch(
+                        self.train_source_loader_val, self.train_target_loader_val)
+
+                if stop >= self.config.early_stop:
+                    self.pprint('=================Early stop!!')
+                    break
 
         self.pprint('Max result: ' + str(mxacc))
 

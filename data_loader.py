@@ -7,7 +7,7 @@ from torchvision import transforms
 import os
 from PIL import Image
 from torch.utils.data.sampler import SubsetRandomSampler
-from skimage import io
+# from skimage import io
 
 
 class PlaceCrop(object):

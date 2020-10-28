@@ -17,7 +17,7 @@ class PositiveLinear(nn.Linear):
 """
 class MLP(nn.Module):
 
-    def __init__(self, n_input, n_hiddens, n_output, drop_out=0, mono=False):
+    def __init__(self, n_input, n_hiddens, n_output, drop_out=0, mono=False, init_net=True):
         """Init func
 
         Args:
@@ -26,6 +26,7 @@ class MLP(nn.Module):
             n_output (int): output dim
             drop_out (float, optional): drop_out rate. Defaults to 0.
             mono (bool, optional): Monotonic networks or not. Defaults to False.
+            init_net (bool, optional): Initialize the network or not. Defaults to True.
         """
         super(MLP, self).__init__()
         self.is_mono = mono
@@ -36,7 +37,7 @@ class MLP(nn.Module):
                 hidden.append(PositiveLinear(n_input, layer))
             else:
                 hidden.append(nn.Linear(n_input, layer))
-            hidden.append(nn.ReLU(inplace=True))
+            hidden.append(nn.ReLU())
             if self.drop_out != 0:
                 hidden.append(nn.Dropout(self.drop_out))
             n_input = layer
@@ -45,7 +46,8 @@ class MLP(nn.Module):
             self.out = PositiveLinear(n_input, n_output)
         else:
             self.out = nn.Linear(n_input, n_output)
-        self.init_layers()
+        if init_net:
+            self.init_layers()
 
     def forward(self, x):
         x = self.hidden(x)

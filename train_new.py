@@ -1,13 +1,12 @@
-# torch=1.0.0
 import pretty_errors
 import os
-# os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
 import argparse
 import torch
 import torch.nn as nn
 import numpy as np
 import data_loader
-from model import GNet, L2M, L2MTrainer, GNet2
+from model import GNet, L2M, L2MTrainer, GNet2, GNetGram
 import datetime
 import random
 import os
@@ -44,31 +43,35 @@ def load_data(root_path, source_dir, target_dir, batch_size):
 
 def get_data_config(dataset_name):
     class_num, width, srcweight, is_cen = -1, -1, -1, -1
-    if dataset_name == 'Office-31':
+    if dataset_name.lower() in ['office-31', 'office31', 'o31']:
         class_num = 31
         width = 2048
         srcweight = 3
         is_cen = False
-    elif dataset_name == 'Office-Home':
+    elif dataset_name.lower() in ['office-home', 'officehome', 'ohome']:
         class_num = 65
         width = 2048
         srcweight = 3
         is_cen = False
-    elif dataset_name == 'ImageCLEF-DA':
+    elif dataset_name.lower() in ['imageclef-da', 'clef', 'imageclef', 'imageclefda']:
         class_num = 12
         width = 2048
         srcweight = 2
         is_cen = False
-    elif dataset_name == 'VisDA':
+    elif dataset_name.lower() in ['visda', 'visda17', 'visda-17']:
         class_num = 12
         width = 2048
         srcweight = 3
         is_cen = False
-    elif dataset_name == 'Covid-19':
+        args.source_dir = 'train'
+        args.test_dir = 'validation'
+    elif dataset_name.lower() in ['covid-19', 'covid', 'covid19']:
         class_num = 2
         width = 512
         srcweight = 3
         is_cen = False
+        args.source_dir = 'pneumonia'
+        args.test_dir = 'covid'
     return class_num, width, srcweight, is_cen
 
 
@@ -89,8 +92,9 @@ def init_gnet(width, class_num):
     elif args.match_feat_type == 6:
         input_gnet = width + 1
     assert (input_gnet != 0), 'GNet error!'
-    gnet = GNet(input_gnet, [100, 100], 1, use_set=False, drop_out=.5, mono=True)
-    # gnet = GNet2(input_gnet, [512, 256], 100, use_set=False, drop_out=.5)
+    # gnet = GNetGram(args.batch_size ** 2, [512, 256], 1, use_set=False, drop_out=.5, mono=True, init_net=False)
+    # gnet = GNet2(input_gnet, [512, 256], 100, use_set=True, drop_out=.5)
+    gnet = GNet(input_gnet, [512, 512, 256, 256], 1, use_set=True, drop_out=.5, mono=True, init_net=True)
     return gnet
 
 
@@ -139,6 +143,7 @@ def get_args():
     parser.add_argument('--multi_gpu', type=str2bool,
                         nargs='?', const=True, default=False)
     parser.add_argument('--early_stop', type=int, default=30)
+    parser.add_argument('--exp', type=str, default='l2m')
 
     args = parser.parse_args()
     return args
@@ -151,60 +156,42 @@ if __name__ == '__main__':
     assert (args.match_feat_type <= 6), 'option match_feat_type error!'
 
     # controls random seed
-    # np.random.seed(args.seed)
-    # torch.manual_seed(args.seed)
-    # random.seed(args.seed)
-    # torch.cuda.manual_seed(args.seed)
-    # torch.cuda.manual_seed_all(args.seed)
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     args.save_path = os.path.join(args.save_folder, args.save_path)
     args.log_file = args.save_path.replace('.mdl', '.log')
 
-    pprint(args)
+    pprint(vars(args))
 
     gnet = init_gnet(1024, class_num)
     basenet = 'ResNet18' if args.dataset == 'Covid-19' else 'ResNet50'
 
-    assist_model_old = L2M(base_net=basenet, bottleneck_dim=1024, width=256,
+    model_old = L2M(base_net=basenet, bottleneck_dim=1024, width=256,
                            class_num=class_num, srcweight=srcweight, use_adv=args.use_adv, match_feat_type=args.match_feat_type, dataset=args.dataset, cat_feature=args.cat_feature)
-    assist_model = L2M(base_net=basenet, bottleneck_dim=1024, width=256,
+    model = L2M(base_net=basenet, bottleneck_dim=1024, width=256,
                        class_num=class_num, srcweight=srcweight, use_adv=args.use_adv, match_feat_type=args.match_feat_type, dataset=args.dataset, cat_feature=args.cat_feature)
     gnet = gnet.cuda()
-    assist_model.c_net = assist_model.c_net.cuda()
-    assist_model_old.c_net = assist_model_old.c_net.cuda()
+    model.net = model.net.cuda()
+    model_old.net = model_old.net.cuda()
 
     # controls multi-gpu training
     if args.multi_gpu:
-        device_ids = ['0', '1']
+        device_ids = [0, 1]
         gnet = torch.nn.DataParallel(gnet, device_ids)
-        assist_model.c_net = torch.nn.DataParallel(
-            assist_model.c_net, device_ids)
-        assist_model_old.c_net = torch.nn.DataParallel(
-            assist_model_old.c_net, device_ids)
+        model.net = torch.nn.DataParallel(
+            model.net, device_ids)
+        model_old.net = torch.nn.DataParallel(
+            model_old.net, device_ids)
 
     train_source_loader, train_target_loader, test_target_loader = load_data(
         args.root_path, args.source_dir, args.test_dir, args.batch_size)
     dataloaders = train_source_loader, train_target_loader, test_target_loader
 
-    param_groups = assist_model.get_parameter_list()
-    group_ratios = [group['lr'] for group in param_groups]
-
-    param_groups2 = assist_model_old.get_parameter_list()
-    group_ratios2 = [group['lr'] for group in param_groups2]
-
-    optimizer = torch.optim.SGD(param_groups,
-                                lr=args.init_lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay,
-                                nesterov=args.nesterov)
-    optimizer_old = torch.optim.SGD(param_groups2,
-                                    lr=args.init_lr,
-                                    momentum=args.momentum,
-                                    weight_decay=args.weight_decay,
-                                    nesterov=args.nesterov)
-
-    trainer = L2MTrainer(gnet, assist_model, assist_model_old,
-                         optimizer, optimizer_old, dataloaders, args)
+    trainer = L2MTrainer(gnet, model, model_old, dataloaders, args)
     trainer.train()

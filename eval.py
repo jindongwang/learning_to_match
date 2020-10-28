@@ -164,7 +164,7 @@ if __name__ == '__main__':
         calcf1 = False
 
     model = L2M(base_net=basenet, width=width, class_num=class_num, srcweight=srcweight, args=args)
-    model.c_net.load_state_dict(torch.load(args.model_file))
+    model.net.load_state_dict(torch.load(args.model_file))
     model.set_train(False)
     train_source_loader, train_target_loader, test_target_loader = load_data()
     ret = evaluate(model, test_target_loader, calcf1=calcf1)

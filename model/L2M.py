@@ -26,10 +26,10 @@ class L2MNet(nn.Module):
         self.base_network = backbone.network_dict[base_net]()
         self.bottleneck_layer = nn.Sequential(*[nn.Linear(self.base_network.output_num(), bottleneck_dim),
                                                 nn.BatchNorm1d(bottleneck_dim),
-                                                nn.ReLU(inplace=True),
-                                                nn.Dropout(0.5)])
+                                                nn.ReLU(inplace=False),
+                                                nn.Dropout(0.5, inplace=False)])
         self.classifier_layer = nn.Sequential(*[nn.Linear(bottleneck_dim, width),
-                                                nn.ReLU(inplace=True),
+                                                nn.ReLU(),
                                                 nn.Dropout(0.5),
                                                 nn.Linear(width, class_num)])
         self.softmax = nn.Softmax(dim=1)
@@ -41,12 +41,10 @@ class L2MNet(nn.Module):
             self.classifier_layer[dep * 3].bias.data.fill_(0.0)
 
         self.parameter_list = [{"params": self.base_network.parameters(), "lr": 0.1},
-                               {"params": self.bottleneck_layer.parameters(),
-                                "lr": 1},
+                               {"params": self.bottleneck_layer.parameters(), "lr": 1},
                                {"params": self.classifier_layer.parameters(), "lr": 1}]
 
         if self.use_adv:
-            # self.grl_layer = GradReverse()
             self.classifier_layer_2 = MLP(
                 bottleneck_dim, [width], class_num, drop_out=.5)
             # DANN: add DANN, make L2M not only class-invariant (as conditional loss) but also domain invariant (as marginal loss)
@@ -67,12 +65,11 @@ class L2MNet(nn.Module):
         Returns:
             outputs
         """
-        features = self.base_network(inputs)
-        features = self.bottleneck_layer(features)
+        f = self.base_network(inputs)
+        features = self.bottleneck_layer(f)
         outputs_adv, domain_output = None, None
 
         if self.use_adv:
-            # features_adv = self.grl_layer(features)
             features_adv = GradReverse.apply(features, 1)
             domain_output = torch.sigmoid(self.domain_classifier(features_adv))
             outputs_adv = self.classifier_layer_2(features_adv)
@@ -92,8 +89,8 @@ class L2MNet(nn.Module):
             output_prob: probability
             outputs: logits
         """
-        features = self.base_network(inputs)
-        features = self.bottleneck_layer(features)
+        f = self.base_network(inputs)
+        features = self.bottleneck_layer(f)
         outputs = self.classifier_layer(features)
         output_prob = self.softmax(outputs)
         return output_prob, outputs
@@ -142,7 +139,7 @@ class L2M(object):
             dataset (str, optional): which dataset you use. Defaults to 'Office-Home'.
             cat_feature (str, optional): column or row to concat features. Defaults to 'column'.
         """
-        self.c_net = L2MNet(base_net, bottleneck_dim,
+        self.net = L2MNet(base_net, bottleneck_dim,
                             width, class_num, use_adv)
         self.is_train = False
         self.class_num = class_num
@@ -172,8 +169,7 @@ class L2M(object):
         class_criterion = nn.CrossEntropyLoss()
         len_src, len_tar = labels_source.size(
             0), inputs.size(0) - labels_source.size(0)
-        feat, outputs, out_prob, outputs_adv, domain_output = self.c_net(
-            inputs)
+        feat, outputs, out_prob, outputs_adv, domain_output = self.net(inputs)
         classifier_loss = class_criterion(outputs[:len_src], labels_source)
         self.label_src = labels_source
         self.label_tar = out_prob[len_src:].max(1)[1]
@@ -203,13 +199,13 @@ class L2M(object):
         Returns:
             softmax_outputs
         """
-        _, _, softmax_outputs, _, _ = self.c_net(inputs)
+        _, _, softmax_outputs, _, _ = self.net(inputs)
         return softmax_outputs
 
     def get_parameter_list(self):
-        if isinstance(self.c_net, torch.nn.DataParallel) or isinstance(self.c_net, torch.nn.parallel.DistributedDataParallel):
-            return self.c_net.module.parameter_list
-        return self.c_net.parameter_list
+        if isinstance(self.net, torch.nn.DataParallel) or isinstance(self.net, torch.nn.parallel.DistributedDataParallel):
+            return self.net.module.parameter_list
+        return self.net.parameter_list
 
     def match_feat(self, cond_loss, mar_loss, feat, logits):
         """Generate matching features

@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import data_loader
-from model import GNet, L2M, GNet2, L2MTrainerCritic
+from model import GNet, L2M, GNet2, L2MTrainerCritic, GNetGram
 import datetime
 import random
 import os
@@ -91,6 +91,7 @@ def init_gnet(width, class_num):
     assert (input_gnet != 0), 'GNet error!'
     # gnet = GNet(input_gnet, [500, 300, 100], 1, use_set=False, drop_out=.5)
     gnet = GNet2(input_gnet, [256], 100, use_set=True, drop_out=.5)
+    # gnet = GNetGram(args.batch_size ** 2, [512, 256], 1, use_set=False, drop_out=.5, mono=True, init_net=False)
     return gnet
 
 
@@ -139,7 +140,7 @@ def get_args():
     parser.add_argument('--early_stop', type=int, default=50)
     parser.add_argument('--glr', type=float, default=1e-2)
     parser.add_argument('--pretrain', type=str2bool,
-                        nargs='?', const=True, default=True)
+                        nargs='?', const=True, default=False)
     parser.add_argument('--exp', type=str, default='L2M')
 
     args = parser.parse_args()
@@ -172,15 +173,15 @@ if __name__ == '__main__':
     assist_model = L2M(base_net=basenet, bottleneck_dim=1024, width=256,
                        class_num=class_num, srcweight=srcweight, use_adv=args.use_adv, match_feat_type=args.match_feat_type, dataset=args.dataset, cat_feature=args.cat_feature)
     gnet = gnet.cuda()
-    assist_model.c_net = assist_model.c_net.cuda()
-    assist_model_old.c_net = assist_model_old.c_net.cuda()
+    assist_model.net = assist_model.net.cuda()
+    assist_model_old.net = assist_model_old.net.cuda()
     if args.multi_gpu:
         device_ids = [0, 1, 2, 3]
         gnet = torch.nn.DataParallel(gnet, device_ids)
-        assist_model.c_net = torch.nn.DataParallel(
-            assist_model.c_net, device_ids)
-        assist_model_old.c_net = torch.nn.DataParallel(
-            assist_model_old.c_net, device_ids)
+        assist_model.net = torch.nn.DataParallel(
+            assist_model.net, device_ids)
+        assist_model_old.net = torch.nn.DataParallel(
+            assist_model_old.net, device_ids)
 
     train_source_loader, train_target_loader, test_target_loader = load_data(
         args.root_path, args.source_dir, args.test_dir, args.batch_size)

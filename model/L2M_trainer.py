@@ -5,7 +5,230 @@ import datetime
 import os
 from utils.utils_f1 import metric
 import copy
+from utils.visualize import Visualize
+import data_loader
+import random
 
+
+class L2MTrainer(object):
+    """Main training class"""
+
+    def __init__(self, gnet, model, model_old, dataloaders, config, max_iter=200000) -> None:
+        """Init func
+
+        Args:
+            gnet (GNet): gnet
+            model (model): model
+            model_old (old model): old model
+            dataloaders (list): [source_train_loader, target_train_loader, target_test_loader]
+            config (dict): config dict
+            max_iter (int, optional): maximum iteration num. Defaults to 200000.
+        """
+        self.gnet = gnet
+        self.model = model
+        self.model_old = model_old
+        self.config = config
+
+        self.param_groups = self.model.get_parameter_list()
+        self.g_param_groups = self.gnet.get_parameter_list()
+        self.g_param_groups.extend(self.param_groups)
+        self.group_ratios = [group["lr"] for group in self.g_param_groups]
+        self.optimizer_m = torch.optim.SGD(self.g_param_groups, lr=self.config.init_lr, momentum=self.config.momentum, weight_decay=self.config.weight_decay, nesterov=self.config.nesterov)
+        self.glr = self.config.glr
+        
+        self.optimizer_g = torch.optim.SGD(self.g_param_groups, lr=self.glr, momentum=self.config.momentum, weight_decay=self.config.weight_decay)
+        self.max_iter = max_iter
+        self.train_source_loader, self.train_target_loader, self.test_target_loader = dataloaders
+        self.meta_loader = None
+
+        self.save_path = self.config.save_path
+
+        self.lr_scheduler = INVScheduler(gamma=self.config.gamma, decay_rate=self.config.decay_rate, init_lr=self.config.init_lr)
+        self.vis = Visualize(port=8097, env=self.config.exp)
+
+    def update_main_model(self, src_train_loader, tar_train_loader):
+        """Update the main model (feature learning)
+
+        Args:
+            src_train_loader (dataloader): Source dataloader
+            tar_train_loader (dataloader): Target dataloader
+
+        Returns:
+            tuple: classification loss and gloss (on average)
+        """
+        classifier_loss, gloss = -1, -1
+        lst_cls, lst_gloss = [], []
+        for (datas, datat) in zip(src_train_loader, tar_train_loader):
+            inputs_source, labels_source = datas
+            inputs_target, _ = datat
+            if inputs_source.size(0) != inputs_target.size(0):
+                continue
+
+            # self.optimizer_m, _ = self.lr_scheduler.next_optimizer(
+            #     self.group_ratios, self.optimizer_m, iter_num / 5)
+            inputs_source, inputs_target, labels_source = inputs_source.cuda(
+            ), inputs_target.cuda(), labels_source.cuda(),
+            inputs = torch.cat((inputs_source, inputs_target), dim=0)
+            set_require_grad(self.model.net, True)
+            classifier_loss, cond_loss, mar_loss, feat, logits = self.model.get_loss(inputs, labels_source)
+            m_feat = self.model.match_feat(
+                cond_loss, mar_loss, feat, logits)
+
+            gloss = self.gnet(m_feat).mean()
+            total_loss = classifier_loss + gloss
+            
+            self.optimizer_m.zero_grad()
+            total_loss.backward()
+            self.optimizer_m.step()
+            lst_cls.append(classifier_loss.item())
+            lst_gloss.append(gloss.item())
+            # iter_num += 1
+        avg_loss = np.array(lst_cls).mean()
+        avg_gloss = np.array(lst_gloss).mean()
+        return avg_loss, avg_gloss
+
+    def update_gnet(self, source_loader, meta_loader, nepoch=1):
+        """Update gnet
+
+        Args:
+            source_loader (dataloader): source dataloader
+            meta_loader (dataloader): metaloader
+            nepoch (int, optional): update g for how much epochs. Defaults to 1.
+
+        Returns:
+            tuple: several losses
+        """
+        lst_diff, lst_g_loss_pre, lst_g_loss_post, lst_mar_loss, lst_mar_loss2 = [], [], [], [], []
+        for _ in range(nepoch):
+            for (datas, datat) in zip(source_loader, meta_loader):
+                inputs_source, labels_source = datas
+                meta_data, meta_label = datat
+                self.optimizer_g.zero_grad()
+                meta_data, meta_label = meta_data.cuda(), meta_label.cuda()
+                inputs_source, labels_source = inputs_source.cuda(), labels_source.cuda()
+                inputs_tmp = torch.cat((inputs_source, meta_data), dim=0)
+                _, cond_loss, mar_loss, feat, logits = self.model_old.get_loss(inputs_tmp, labels_source)
+                m_feat = self.model_old.match_feat(cond_loss, mar_loss, feat, logits)
+                g_loss_pre = self.gnet(m_feat).mean()
+                _, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(inputs_tmp, labels_source)
+                m_feat2 = self.model.match_feat(cond_loss2, mar_loss2, feat2, logits2)
+                g_loss_post = self.gnet(m_feat2).mean()
+
+                diff = gnet_diff(g_loss_pre, g_loss_post)
+                diff.backward()
+                self.optimizer_g.step()
+
+                lst_diff.append(diff.item())
+                lst_g_loss_pre.append(g_loss_pre.item())
+                lst_g_loss_post.append(g_loss_post.item())
+                lst_mar_loss.append(mar_loss.item())
+                lst_mar_loss2.append(mar_loss2.item())
+        return np.array(lst_diff).mean(), np.array(lst_g_loss_pre).mean(), np.array(lst_g_loss_post).mean(), np.array(lst_mar_loss).mean(), np.array(lst_mar_loss2).mean()
+
+
+    def train(self):
+        self.pprint("Start train...")
+        iter_num = 0
+        epoch = 0
+        stop = 0
+        mxacc = 0
+        a = torch.randn(2, 1024).cuda()
+        b = torch.randn(2, 3, 224, 224).cuda()
+        while True:
+            self.model_old.net.load_state_dict(self.model.net.state_dict())
+            self.gnet.train()
+            self.model_old.net.train()
+            self.model.net.train()
+
+            # construct meta_loader from target_loader before each epoch
+            if epoch == 0:
+                self.meta_loader = generate_metadata(m=5,
+                                                loader=self.test_target_loader)
+            else:
+                self.meta_loader = generate_metadata_soft(m=5, train_target_loader=self.test_target_loader, model=self.model)
+
+            # cls_loss, gloss = self.update_main_model(self.train_source_loader, self.train_target_loader)
+            cls_loss = 0
+            
+            diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(self.train_source_loader, self.meta_loader)
+            # diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = 0, 0, 0, 0, 0
+
+            self.vis.plot_line([mar_loss, mar_loss2], epoch, title="MMD", legend=["old", "new"])
+            self.vis.plot_line([g_loss_pre, g_loss_post], epoch, title="GNet", legend=["old", "new"])
+
+            # print(self.model.net.classifier_layer[0].weight.grad.sum())
+            # print(self.gnet.out.weight.grad.sum())
+            # Shuffle dataset
+            kwargs = {'num_workers': 4, 'pin_memory': True}
+            train_val_split = -1
+            self.config.seed = epoch * 2
+            np.random.seed(self.config.seed)
+            torch.manual_seed(self.config.seed)
+            random.seed(self.config.seed)
+            torch.cuda.manual_seed(self.config.seed)
+            torch.cuda.manual_seed_all(self.config.seed)
+            self.train_source_loader = data_loader.load_training(
+                self.config.root_path, self.config.source_dir, self.config.batch_size, kwargs, train_val_split)
+            self.train_target_loader = data_loader.load_training(
+                self.config.root_path, self.config.test_dir, self.config.batch_size, kwargs, train_val_split)
+
+            stop += 1
+            calcf1 = True if self.config.dataset == "Covid-19" else False
+            ret = evaluate(self.model, self.test_target_loader, calcf1=calcf1)
+            acc = (ret["metr"]["f1"]
+                   if self.config.dataset == "Covid-19" else ret["accuracy"])
+            if acc >= mxacc:
+                stop = 0
+                mxacc = acc
+                torch.save(self.model.net.state_dict(), self.save_path)
+            if not calcf1:
+                self.pprint(
+                    f"[Epoch:{epoch:02d}], cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, acc:{acc:.4f}, mxacc:{mxacc:.4f}")
+            else:
+                self.pprint(f"[Epoch:{epoch:02d}], acc: {ret['accuracy']:.4f}, mxacc: {mxacc:.4f}")
+                self.pprint(ret["metr"])
+            epoch += 1
+
+            if iter_num >= self.max_iter:
+                self.pprint("finish train")
+                break
+            if stop >= self.config.early_stop:
+                self.pprint("=================Early stop!!")
+                break
+        self.pprint(f"Max result: {mxacc}")
+        self.pprint("Train is finished!")
+
+    def pprint(self, *text):
+        # print with UTC+8 time
+        log_file = self.config.save_path.replace(".mdl", ".log")
+        curr_time = ("[" + str(datetime.datetime.utcnow() +
+                               datetime.timedelta(hours=8))[:19] + "] -")
+        print(curr_time, *text, flush=True)
+        if not os.path.exists(log_file):
+            if not os.path.exists(self.config.save_folder):
+                os.mkdir(self.config.save_folder)
+            fp = open(self.config.log_file, "w")
+            fp.close()
+        with open(log_file, "a") as f:
+            print(curr_time, *text, flush=True, file=f)
+
+def gnet_diff(g_loss_pre, g_loss_post):
+    """Difference between previous and current gnet losses: tanh(g_loss_pre, g_loss_post)
+    May use different functions such as subtraction, log, or crossentropy...
+
+    Args:
+        g_loss_pre (flaot): previous gnet loss
+        g_loss_post (float): current gnet loss
+
+    Returns:
+        diff (float): difference
+    """
+    diff = 100 * (g_loss_post - g_loss_pre)
+    # diff = g_loss_post - g_loss_pre
+    # diff = torch.tanh(g_loss_post - g_loss_pre)
+    # diff = torch.tanh(torch.nn.CrossEntropyLoss()(g_loss_pre, g_loss_post))
+    # diff = torch.log(g_loss_pre) - torch.log(g_loss_post)
+    return diff
 
 def update_params(model, grads, lr):
     """Update params by gradient descent
@@ -20,186 +243,6 @@ def update_params(model, grads, lr):
             f.data.sub_(lr * grads[idx])
 
 
-def gnet_diff(g_loss_pre, g_loss_post):
-    """Difference between previous and current gnet losses: tanh(g_loss_pre, g_loss_post)
-    May use different functions such as subtraction, log, or crossentropy...
-
-    Args:
-        g_loss_pre (flaot): previous gnet loss
-        g_loss_post (float): current gnet loss
-
-    Returns:
-        diff (float): difference
-    """
-    # diff = 100 * (g_loss_pre - g_loss_post)
-    diff = torch.tanh(g_loss_post - g_loss_pre)
-    # diff = torch.tanh(torch.nn.CrossEntropyLoss()(g_loss_pre, g_loss_post))
-    # diff = torch.log(g_loss_pre) - torch.log(g_loss_post)
-    return diff
-
-
-class L2MTrainer(object):
-    """Main training class
-    """
-
-    def __init__(self, gnet, model, model_old, optimizer_m, optimizer_g, dataloaders, config, max_iter=200000) -> None:
-        """Init func
-
-        Args:
-            gnet (GNet): gnet
-            model (model): model
-            model_old (old model): old model
-            optimizer_m (nn.optim): optimizer for optimizing L2M model
-            optimizer_g (nn.optim): optimizer for optimizing GNet
-            dataloaders (list): [source_train_loader, target_train_loader, target_test_loader]
-            config (dict): config dict
-            max_iter (int, optional): maximum iteration num. Defaults to 200000.
-        """
-        self.gnet = gnet
-        self.model = model
-        self.model_old = model_old
-        self.optimizer_m = optimizer_m
-        self.optimizer_g = optimizer_g
-        self.glr = config.glr
-        # glr = self.glr * ((0.1 ** int(epoch >= 300))
-        #                       * (0.1 ** int(epoch >= 600)))
-        self.optimizer_g = torch.optim.SGD(
-                self.gnet.parameters(), lr=self.glr)
-        self.max_iter = max_iter
-        self.train_source_loader, self.train_target_loader, self.test_target_loader = dataloaders
-        self.config = config
-        self.save_path = config.save_path
-        
-        self.lr_scheduler = INVScheduler(gamma=self.config.gamma,
-                                         decay_rate=self.config.decay_rate,
-                                         init_lr=self.config.init_lr)
-
-    def train(self):
-        self.pprint('Start train...')
-        iter_num = 0
-        epoch = 0
-        stop = 0
-        mxacc = 0
-        param_groups = self.model.get_parameter_list()
-        group_ratios = [group['lr'] for group in param_groups]
-        while True:
-            
-            self.model_old.c_net.load_state_dict(self.model.c_net.state_dict())
-            self.gnet.train()
-            self.model_old.c_net.train()
-            self.model.c_net.train()
-            
-            # construct meta_loader from target_loader before each epoch
-            if epoch == 0:
-                meta_loader = generate_metadata(
-                    m=5, loader=self.test_target_loader)
-            else:
-                meta_loader = generate_metadata_soft(
-                    m=5, train_target_loader=self.test_target_loader, model=self.model)
-
-            iter_meta = iter(meta_loader)
-            lst_cls, lst_val = [], []
-            inputs_source, labels_source = None, None
-            for (datas, datat) in zip(self.train_source_loader, self.train_target_loader):
-                inputs_source, labels_source = datas
-                inputs_target, _ = datat
-                if inputs_source.size(0) != inputs_target.size(0):
-                    continue
-                
-                self.optimizer_m, _ = self.lr_scheduler.next_optimizer(
-                    group_ratios, self.optimizer_m, iter_num/5)
-                inputs_source, inputs_target, labels_source = inputs_source.cuda(
-                ), inputs_target.cuda(), labels_source.cuda()
-
-                inputs = torch.cat((inputs_source, inputs_target), dim=0)
-                set_require_grad(self.model.c_net, True)
-                classifier_loss, cond_loss, mar_loss, feat, logits = self.model.get_loss(
-                    inputs, labels_source)
-                m_feat = self.model.match_feat(
-                    cond_loss, mar_loss, feat, logits)
-                
-                mv_lambda = self.gnet(m_feat.detach().data)
-                loss = mv_lambda.mean()
-                total_loss = classifier_loss + loss
-                self.optimizer_m.zero_grad()
-                total_loss.backward()
-                self.optimizer_m.step()
-                lst_cls.append(classifier_loss.item())
-                iter_num += 1
-            
-
-            try:
-                meta_data, meta_label = iter_meta.next()
-            except:
-                iter_meta = iter(meta_loader)
-                meta_data, meta_label = iter_meta.next()
-            meta_data, meta_label = meta_data.cuda(), meta_label.cuda()
-            inputs_tmp = torch.cat((inputs_source, meta_data), dim=0)
-            _, cond_loss, mar_loss, feat, logits = self.model_old.get_loss(
-                inputs_tmp, labels_source)
-            m_feat = self.model_old.match_feat(
-                cond_loss, mar_loss, feat, logits)
-            g_loss_pre = self.gnet(m_feat).mean()
-
-            _, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(
-                inputs_tmp, labels_source)
-            m_feat2 = self.model.match_feat(
-                cond_loss2, mar_loss2, feat2, logits2)
-            g_loss_post = self.gnet(m_feat2).mean()
-
-            diff = gnet_diff(g_loss_pre, g_loss_post)
-            self.optimizer_g.zero_grad()
-            diff.backward()
-            self.optimizer_g.step()
-
-            
-            lst_val.append(diff.item())
-            
-            # print(self.model.c_net.classifier_layer[0].weight.grad.sum())
-            # print(self.gnet.out.weight.grad.sum())
-            stop += 1
-            calcf1 = True if self.config.dataset == 'Covid-19' else False
-            ret = evaluate(self.model, self.test_target_loader, calcf1=calcf1)
-            acc = ret['metr']['f1'] if self.config.dataset == 'Covid-19' else ret['accuracy']
-            if acc >= mxacc:
-                stop = 0
-                mxacc = acc
-                torch.save(self.model.c_net.state_dict(), self.save_path)
-            if not calcf1:
-                classifier_loss = np.array(lst_cls).mean()
-                gnet_loss = np.array(lst_val).mean()
-                self.pprint('\nEpoch:[{:.0f}({:.2f}%)], cls_loss: {:.5f}, g_loss: {:.10f}, acc:{:.4f}, mxacc:{:.4f}'.format(
-                    epoch, float(iter_num) * 100. / self.max_iter, classifier_loss, gnet_loss, acc, mxacc))
-            else:
-                self.pprint('\nEpoch:[{:.0f}/({:.2f}%)], acc: {:.4f}, mxacc: {:.4f}'.format(
-                    epoch, float(iter_num) * 100. / self.max_iter, ret['accuracy'], mxacc))
-                self.pprint(ret['metr'])
-            epoch += 1
-
-            if iter_num >= self.max_iter:
-                self.pprint('finish train')
-                break
-            if stop >= self.config.early_stop:
-                self.pprint('=================Early stop!!')
-                break
-        self.pprint('Max result: ' + str(mxacc))
-        self.pprint('Train is finished!')
-
-    def pprint(self, *text):
-        # print with UTC+8 time
-        log_file = self.config.save_path.replace('.mdl', '.log')
-        curr_time = '['+str(datetime.datetime.utcnow() +
-                            datetime.timedelta(hours=8))[:19]+'] -'
-        print(curr_time, *text, flush=True)
-        if not os.path.exists(log_file):
-            if not os.path.exists(self.config.save_folder):
-                os.mkdir(self.config.save_folder)
-            fp = open(self.config.log_file, 'w')
-            fp.close()
-        with open(log_file, 'a') as f:
-            print(curr_time, *text, flush=True, file=f)
-
-
 class INVScheduler(object):
     def __init__(self, gamma, decay_rate, init_lr=0.001):
         self.gamma = gamma
@@ -207,16 +250,16 @@ class INVScheduler(object):
         self.init_lr = init_lr
 
     def next_optimizer(self, group_ratios, optimizer, num_iter):
-        lr = self.init_lr * (1 + self.gamma * num_iter) ** (-self.decay_rate)
+        lr = self.init_lr * (1 + self.gamma * num_iter)**(-self.decay_rate)
         i = 0
         for param_group in optimizer.param_groups:
-            param_group['lr'] = lr * group_ratios[i]
+            param_group["lr"] = lr * group_ratios[i]
             i += 1
         return optimizer, lr
 
 
 def get_softlabel(model, loader):
-    model.c_net.eval()
+    model.net.eval()
     first_test = True
     all_probs = None
     for datat in loader:
@@ -230,7 +273,7 @@ def get_softlabel(model, loader):
         else:
             all_probs = torch.cat((all_probs, probabilities), 0)
     prob, predict = torch.max(all_probs, 1)
-    model.c_net.train()
+    model.net.train()
     return prob, predict
 
 
@@ -245,8 +288,8 @@ def generate_metadata(m, loader):
             idx_vis.append(idx)
     metaimgs = []
     for c in range(len(start_idx)):
-        if c != len(start_idx)-1:
-            shuffleimgs = targetimgs[start_idx[c]:start_idx[c+1]]
+        if c != len(start_idx) - 1:
+            shuffleimgs = targetimgs[start_idx[c]:start_idx[c + 1]]
         else:
             shuffleimgs = targetimgs[start_idx[c]:]
         np.random.shuffle(shuffleimgs)
@@ -264,8 +307,8 @@ def generate_metadata_soft(m, train_target_loader, model):
     newimgs = []
     for i in range(len(train_target_loader.dataset.imgs)):
         if i < len(softlabels):
-            img = tuple([train_target_loader.dataset.imgs[i]
-                         [0], softlabels[i].item()])
+            img = tuple(
+                [train_target_loader.dataset.imgs[i][0], softlabels[i].item()])
             newimgs.append(img)
         else:
             newimgs.append(train_target_loader.dataset.imgs[i])
@@ -297,7 +340,7 @@ def set_require_grad(model, grad=True):
 
 
 def evaluate(model, input_loader, calcf1=False):
-    model.c_net.eval()
+    model.net.eval()
     num_iter = len(input_loader)
     iter_test = iter(input_loader)
     first_test = True
@@ -321,13 +364,17 @@ def evaluate(model, input_loader, calcf1=False):
     ret = {}
     probs, predict = torch.max(all_probs, 1)
     if calcf1:
-        metr = metric(all_labels.cpu().detach().numpy(), predict.cpu(
-        ).detach().numpy(), probs.cpu().detach().numpy())
-        ret['metr'] = metr
-    accuracy = torch.sum(torch.squeeze(predict).float() ==
-                         all_labels).item() / float(all_labels.size()[0])
-    model.c_net.train()
-    ret['accuracy'] = accuracy
+        metr = metric(
+            all_labels.cpu().detach().numpy(),
+            predict.cpu().detach().numpy(),
+            probs.cpu().detach().numpy(),
+        )
+        ret["metr"] = metr
+    accuracy = torch.sum(
+        torch.squeeze(predict).float() == all_labels).item() / float(
+            all_labels.size()[0])
+    model.net.train()
+    ret["accuracy"] = accuracy
     return ret
 
 
