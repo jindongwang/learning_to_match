@@ -4,7 +4,6 @@ Ganin et al. Unsupervised domain adaptation by backpropagation. ICML 2015.
 '''
 
 import torch
-import numpy as np
 
 # For pytorch version > 1.0
 # Usage:
@@ -12,18 +11,19 @@ import numpy as np
 class GradReverse(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, lambd, **kwargs: None):
-        ctx.lambd = lambd
+    def forward(ctx, x, alpha):
+        ctx.alpha = alpha
         return x.view_as(x)
 
     @staticmethod
-    def backward(ctx, *grad_output):
-        return grad_output * -ctx.lambd, None
+    def backward(ctx, grad_output):
+        output = grad_output.neg() * ctx.alpha
+        return output, None
 
 # For pytorch version 1.0
 # Usage:
 # grl = GradientReverseLayer(1)  # 1 is the lambda value, you are free to set it
-# b = GradReverse(a)
+# b = grl(a)
 class GradientReverseLayer(torch.autograd.Function):
     def __init__(self, lambd=1):
         self.lambd = lambd

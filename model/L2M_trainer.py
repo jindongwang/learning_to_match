@@ -10,6 +10,7 @@ import data_loader
 import random
 
 
+
 class L2MTrainer(object):
     """Main training class"""
 
@@ -30,21 +31,29 @@ class L2MTrainer(object):
         self.config = config
 
         self.param_groups = self.model.get_parameter_list()
+        self.group_ratios = [group["lr"] for group in self.param_groups]
+        self.optimizer_m = torch.optim.SGD(self.param_groups, lr=self.config.init_lr, momentum=self.config.momentum,
+                                           weight_decay=self.config.weight_decay, nesterov=self.config.nesterov)
         self.g_param_groups = self.gnet.get_parameter_list()
         self.g_param_groups.extend(self.param_groups)
-        self.group_ratios = [group["lr"] for group in self.g_param_groups]
-        self.optimizer_m = torch.optim.SGD(self.g_param_groups, lr=self.config.init_lr, momentum=self.config.momentum, weight_decay=self.config.weight_decay, nesterov=self.config.nesterov)
-        self.glr = self.config.glr
-        
-        self.optimizer_g = torch.optim.SGD(self.g_param_groups, lr=self.glr, momentum=self.config.momentum, weight_decay=self.config.weight_decay)
+        if self.config.gopt == 'adam':
+            self.optimizer_g = torch.optim.Adam(
+                self.gnet.parameters(), lr=self.config.glr)
+        elif self.config.gopt == 'sgd':
+            self.optimizer_g = torch.optim.SGD(self.gnet.parameters(
+            ), lr=self.config.glr, momentum=self.config.momentum, weight_decay=self.config.weight_decay)
+
         self.max_iter = max_iter
         self.train_source_loader, self.train_target_loader, self.test_target_loader = dataloaders
         self.meta_loader = None
 
         self.save_path = self.config.save_path
 
-        self.lr_scheduler = INVScheduler(gamma=self.config.gamma, decay_rate=self.config.decay_rate, init_lr=self.config.init_lr)
+        self.lr_scheduler = INVScheduler(
+            gamma=self.config.gamma, decay_rate=self.config.decay_rate, init_lr=self.config.init_lr)
         self.vis = Visualize(port=8097, env=self.config.exp)
+        self.iter_num = 0
+        self.a = torch.randn(64, 1024).cuda()
 
     def update_main_model(self, src_train_loader, tar_train_loader):
         """Update the main model (feature learning)
@@ -64,25 +73,24 @@ class L2MTrainer(object):
             if inputs_source.size(0) != inputs_target.size(0):
                 continue
 
-            # self.optimizer_m, _ = self.lr_scheduler.next_optimizer(
-            #     self.group_ratios, self.optimizer_m, iter_num / 5)
+            self.optimizer_m, _ = self.lr_scheduler.next_optimizer(
+                self.group_ratios, self.optimizer_m, self.iter_num / 5)
             inputs_source, inputs_target, labels_source = inputs_source.cuda(
             ), inputs_target.cuda(), labels_source.cuda(),
             inputs = torch.cat((inputs_source, inputs_target), dim=0)
-            set_require_grad(self.model.net, True)
-            classifier_loss, cond_loss, mar_loss, feat, logits = self.model.get_loss(inputs, labels_source)
-            m_feat = self.model.match_feat(
-                cond_loss, mar_loss, feat, logits)
+            classifier_loss, cond_loss, mar_loss, feat, logits, _ = self.model.get_loss(
+                inputs, labels_source)
+            m_feat = self.model.match_feat(cond_loss, mar_loss, feat, logits)
 
             gloss = self.gnet(m_feat).mean()
-            total_loss = classifier_loss + gloss
-            
+            total_loss = classifier_loss + mar_loss
+
             self.optimizer_m.zero_grad()
             total_loss.backward()
             self.optimizer_m.step()
             lst_cls.append(classifier_loss.item())
             lst_gloss.append(gloss.item())
-            # iter_num += 1
+            self.iter_num += 1
         avg_loss = np.array(lst_cls).mean()
         avg_gloss = np.array(lst_gloss).mean()
         return avg_loss, avg_gloss
@@ -103,20 +111,29 @@ class L2MTrainer(object):
             for (datas, datat) in zip(source_loader, meta_loader):
                 inputs_source, labels_source = datas
                 meta_data, meta_label = datat
-                self.optimizer_g.zero_grad()
+
                 meta_data, meta_label = meta_data.cuda(), meta_label.cuda()
                 inputs_source, labels_source = inputs_source.cuda(), labels_source.cuda()
+                if inputs_source.size(0) != meta_data.size(0):
+                    continue
                 inputs_tmp = torch.cat((inputs_source, meta_data), dim=0)
-                _, cond_loss, mar_loss, feat, logits = self.model_old.get_loss(inputs_tmp, labels_source)
+
+                _, cond_loss, mar_loss, feat, logits, out_prob = self.model_old.get_loss(
+                    inputs_tmp, labels_source)
                 m_feat = self.model_old.match_feat(cond_loss, mar_loss, feat, logits)
                 g_loss_pre = self.gnet(m_feat).mean()
-                _, cond_loss2, mar_loss2, feat2, logits2 = self.model.get_loss(inputs_tmp, labels_source)
-                m_feat2 = self.model.match_feat(cond_loss2, mar_loss2, feat2, logits2)
+
+                _, cond_loss2, mar_loss2, feat2, logits2, out_prob2 = self.model.get_loss(
+                    inputs_tmp, labels_source)
+                m_feat2 = self.model.match_feat(
+                    cond_loss2, mar_loss2, feat2, logits2)
                 g_loss_post = self.gnet(m_feat2).mean()
 
                 diff = gnet_diff(g_loss_pre, g_loss_post)
+                self.optimizer_g.zero_grad()
                 diff.backward()
                 self.optimizer_g.step()
+                # update_params(self.gnet, get_grad(self.gnet), self.config.glr)
 
                 lst_diff.append(diff.item())
                 lst_g_loss_pre.append(g_loss_pre.item())
@@ -125,15 +142,12 @@ class L2MTrainer(object):
                 lst_mar_loss2.append(mar_loss2.item())
         return np.array(lst_diff).mean(), np.array(lst_g_loss_pre).mean(), np.array(lst_g_loss_post).mean(), np.array(lst_mar_loss).mean(), np.array(lst_mar_loss2).mean()
 
-
     def train(self):
         self.pprint("Start train...")
         iter_num = 0
         epoch = 0
         stop = 0
         mxacc = 0
-        a = torch.randn(2, 1024).cuda()
-        b = torch.randn(2, 3, 224, 224).cuda()
         while True:
             self.model_old.net.load_state_dict(self.model.net.state_dict())
             self.gnet.train()
@@ -142,19 +156,28 @@ class L2MTrainer(object):
 
             # construct meta_loader from target_loader before each epoch
             if epoch == 0:
-                self.meta_loader = generate_metadata(m=5,
-                                                loader=self.test_target_loader)
+                self.meta_loader = generate_metadata(
+                    m=5, loader=self.test_target_loader)
             else:
-                self.meta_loader = generate_metadata_soft(m=5, train_target_loader=self.test_target_loader, model=self.model)
+                self.meta_loader = generate_metadata_soft(
+                    m=5, train_target_loader=self.test_target_loader, model=self.model)
 
-            # cls_loss, gloss = self.update_main_model(self.train_source_loader, self.train_target_loader)
+            # update main model
             cls_loss = 0
-            
-            diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(self.train_source_loader, self.meta_loader)
-            # diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = 0, 0, 0, 0, 0
+            cls_loss, gloss = self.update_main_model(
+                self.train_source_loader, self.train_target_loader)
 
-            self.vis.plot_line([mar_loss, mar_loss2], epoch, title="MMD", legend=["old", "new"])
-            self.vis.plot_line([g_loss_pre, g_loss_post], epoch, title="GNet", legend=["old", "new"])
+            # update gnet
+            diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = 0, 0, 0, 0, 0
+            diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(
+                    self.train_source_loader, self.meta_loader)
+
+            self.vis.plot_line([mar_loss, mar_loss2], epoch,
+                               title="MMD", legend=["old", "new"])
+            self.vis.plot_line([g_loss_pre, g_loss_post],
+                               epoch, title="GNet", legend=["old", "new"])
+
+            # self.pprint(self.gnet(self.a).mean())
 
             # print(self.model.net.classifier_layer[0].weight.grad.sum())
             # print(self.gnet.out.weight.grad.sum())
@@ -173,19 +196,21 @@ class L2MTrainer(object):
                 self.config.root_path, self.config.test_dir, self.config.batch_size, kwargs, train_val_split)
 
             stop += 1
-            calcf1 = True if self.config.dataset == "Covid-19" else False
+            calcf1 = True if self.config.dataset.lower(
+            ) in ['covid-19', 'covid', 'covid19'] else False
             ret = evaluate(self.model, self.test_target_loader, calcf1=calcf1)
-            acc = (ret["metr"]["f1"]
-                   if self.config.dataset == "Covid-19" else ret["accuracy"])
+            acc = ret["metr"]["f1"] if calcf1 else ret["accuracy"]
             if acc >= mxacc:
                 stop = 0
                 mxacc = acc
-                torch.save(self.model.net.state_dict(), self.save_path)
+                torch.save(self.model.net.state_dict(),
+                           self.save_path.replace('.log', '.mdl'))
             if not calcf1:
                 self.pprint(
                     f"[Epoch:{epoch:02d}], cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, acc:{acc:.4f}, mxacc:{mxacc:.4f}")
             else:
-                self.pprint(f"[Epoch:{epoch:02d}], acc: {ret['accuracy']:.4f}, mxacc: {mxacc:.4f}")
+                self.pprint(
+                    f"[Epoch:{epoch:02d}], acc: {ret['accuracy']:.4f}, mxacc: {mxacc:.4f}")
                 self.pprint(ret["metr"])
             epoch += 1
 
@@ -212,6 +237,7 @@ class L2MTrainer(object):
         with open(log_file, "a") as f:
             print(curr_time, *text, flush=True, file=f)
 
+
 def gnet_diff(g_loss_pre, g_loss_post):
     """Difference between previous and current gnet losses: tanh(g_loss_pre, g_loss_post)
     May use different functions such as subtraction, log, or crossentropy...
@@ -230,6 +256,7 @@ def gnet_diff(g_loss_pre, g_loss_post):
     # diff = torch.log(g_loss_pre) - torch.log(g_loss_post)
     return diff
 
+
 def update_params(model, grads, lr):
     """Update params by gradient descent
 
@@ -241,6 +268,16 @@ def update_params(model, grads, lr):
     for idx, f in enumerate(model.parameters()):
         if grads[idx] is not None:
             f.data.sub_(lr * grads[idx])
+
+
+def get_grad(model):
+    grad_phi = []
+    for _, (k, v) in enumerate(model.state_dict().items()):
+        if k.__contains__('bn'):
+            grad_phi.append(None)
+        else:
+            grad_phi.append(v.grad)
+    return grad_phi
 
 
 class INVScheduler(object):

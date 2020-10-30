@@ -26,7 +26,7 @@ class L2MNet(nn.Module):
         self.base_network = backbone.network_dict[base_net]()
         self.bottleneck_layer = nn.Sequential(*[nn.Linear(self.base_network.output_num(), bottleneck_dim),
                                                 nn.BatchNorm1d(bottleneck_dim),
-                                                nn.ReLU(inplace=False),
+                                                nn.ReLU(),
                                                 nn.Dropout(0.5, inplace=False)])
         self.classifier_layer = nn.Sequential(*[nn.Linear(bottleneck_dim, width),
                                                 nn.ReLU(),
@@ -182,13 +182,11 @@ class L2M(object):
             mar_loss = class_criterion(domain_output, domain_label)
         else:  # MMD-based
             fea_src, fea_tar = feat[:len_src], feat[len_src:]
-            conditional_loss = mmd.conditional(
-                fea_src, fea_tar, labels_source, torch.nn.functional.softmax(outputs[len_src:], dim=1), classnum=self.class_num)
-            marginal_loss = mmd.marginal(fea_src, fea_tar)
-            mar_loss = marginal_loss
-            cond_loss = conditional_loss
-
-        return classifier_loss, cond_loss, mar_loss, feat, outputs
+            cond_loss = mmd.conditional(
+                    fea_src, fea_tar, labels_source, torch.nn.functional.softmax(outputs[len_src:], dim=1), classnum=self.class_num)
+            mar_loss = mmd.marginal(fea_src, fea_tar)
+        
+        return classifier_loss, cond_loss, mar_loss, feat, outputs, out_prob
 
     def predict(self, inputs):
         """Prediction function

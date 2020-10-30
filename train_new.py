@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import data_loader
-from model import GNet, L2M, L2MTrainer, GNet2, GNetGram
+from model import GNet, L2M, L2MTrainer, GNetGram
 import datetime
 import random
 import os
@@ -72,6 +72,7 @@ def get_data_config(dataset_name):
         is_cen = False
         args.source_dir = 'pneumonia'
         args.test_dir = 'covid'
+        args.save_path = 'covid.mdl'
     return class_num, width, srcweight, is_cen
 
 
@@ -92,9 +93,8 @@ def init_gnet(width, class_num):
     elif args.match_feat_type == 6:
         input_gnet = width + 1
     assert (input_gnet != 0), 'GNet error!'
-    # gnet = GNetGram(args.batch_size ** 2, [512, 256], 1, use_set=False, drop_out=.5, mono=True, init_net=False)
-    # gnet = GNet2(input_gnet, [512, 256], 100, use_set=True, drop_out=.5)
-    gnet = GNet(input_gnet, [512, 512, 256, 256], 1, use_set=True, drop_out=.5, mono=True, init_net=True)
+    gnet = GNetGram(args.batch_size ** 2, [512, 256], 1, use_set=True, drop_out=.5, mono=True, init_net=False)
+    # gnet = GNet(input_gnet, [512, 256], 1, use_set=True, drop_out=.5, mono=False, init_net=True)
     return gnet
 
 
@@ -142,8 +142,9 @@ def get_args():
     parser.add_argument('--cat_feature', type=str, default='column')
     parser.add_argument('--multi_gpu', type=str2bool,
                         nargs='?', const=True, default=False)
-    parser.add_argument('--early_stop', type=int, default=30)
+    parser.add_argument('--early_stop', type=int, default=20)
     parser.add_argument('--exp', type=str, default='l2m')
+    parser.add_argument('--gopt', type=str, default='sgd')
 
     args = parser.parse_args()
     return args
