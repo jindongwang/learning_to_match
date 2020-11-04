@@ -34,8 +34,6 @@ class L2MTrainer(object):
         self.group_ratios = [group["lr"] for group in self.param_groups]
         self.optimizer_m = torch.optim.SGD(self.param_groups, lr=self.config.init_lr, momentum=self.config.momentum,
                                            weight_decay=self.config.weight_decay, nesterov=self.config.nesterov)
-        self.g_param_groups = self.gnet.get_parameter_list()
-        self.g_param_groups.extend(self.param_groups)
         if self.config.gopt == 'adam':
             self.optimizer_g = torch.optim.Adam(
                 self.gnet.parameters(), lr=self.config.glr)
@@ -53,7 +51,7 @@ class L2MTrainer(object):
             gamma=self.config.gamma, decay_rate=self.config.decay_rate, init_lr=self.config.init_lr)
         self.vis = Visualize(port=8097, env=self.config.exp)
         self.iter_num = 0
-        self.a = torch.randn(64, 1024).cuda()
+        self.a = torch.randn(128, 1024).cuda()
 
     def update_main_model(self, src_train_loader, tar_train_loader):
         """Update the main model (feature learning)
@@ -83,7 +81,7 @@ class L2MTrainer(object):
             m_feat = self.model.match_feat(cond_loss, mar_loss, feat, logits)
 
             gloss = self.gnet(m_feat).mean()
-            total_loss = classifier_loss + mar_loss
+            total_loss = classifier_loss + gloss
 
             self.optimizer_m.zero_grad()
             total_loss.backward()
@@ -111,7 +109,6 @@ class L2MTrainer(object):
             for (datas, datat) in zip(source_loader, meta_loader):
                 inputs_source, labels_source = datas
                 meta_data, meta_label = datat
-
                 meta_data, meta_label = meta_data.cuda(), meta_label.cuda()
                 inputs_source, labels_source = inputs_source.cuda(), labels_source.cuda()
                 if inputs_source.size(0) != meta_data.size(0):
