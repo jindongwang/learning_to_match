@@ -131,7 +131,7 @@ def get_args():
                                 4: logits + conditional loss + marginal loss
                                 5: logits + feature + cond + marg loss (ALL)""")
     parser.add_argument('--init_lr', type=float, default=0.004)
-    parser.add_argument('--glr', type=float, default=0.01,
+    parser.add_argument('--glr', type=float, default=0.0005,
                         help='learning rate for gnet')
     parser.add_argument('--gamma', type=float, default=0.001)
     parser.add_argument('--decay_rate', type=float, default=0.75)

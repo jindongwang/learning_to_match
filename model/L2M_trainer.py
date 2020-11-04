@@ -81,7 +81,7 @@ class L2MTrainer(object):
             m_feat = self.model.match_feat(cond_loss, mar_loss, feat, logits)
 
             gloss = self.gnet(m_feat).mean()
-            total_loss = classifier_loss + gloss
+            total_loss = classifier_loss + 0.5 * gloss + mar_loss
 
             self.optimizer_m.zero_grad()
             total_loss.backward()
@@ -193,8 +193,7 @@ class L2MTrainer(object):
                 self.config.root_path, self.config.test_dir, self.config.batch_size, kwargs, train_val_split)
 
             stop += 1
-            calcf1 = True if self.config.dataset.lower(
-            ) in ['covid-19', 'covid', 'covid19'] else False
+            calcf1 = True if self.config.dataset.lower() in ['covid-19', 'covid', 'covid19'] else False
             ret = evaluate(self.model, self.test_target_loader, calcf1=calcf1)
             acc = ret["metr"]["f1"] if calcf1 else ret["accuracy"]
             if acc >= mxacc:
@@ -207,7 +206,7 @@ class L2MTrainer(object):
                     f"[Epoch:{epoch:02d}], cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, acc:{acc:.4f}, mxacc:{mxacc:.4f}")
             else:
                 self.pprint(
-                    f"[Epoch:{epoch:02d}], acc: {ret['accuracy']:.4f}, mxacc: {mxacc:.4f}")
+                    f"[Epoch:{epoch:02d}], cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, f1: {ret['accuracy']:.4f}, mxf1: {mxacc:.4f}")
                 self.pprint(ret["metr"])
             epoch += 1
 
