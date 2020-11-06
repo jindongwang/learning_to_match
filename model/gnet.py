@@ -62,6 +62,7 @@ class GNet(nn.Module):
         out = torch.sigmoid(x)
         return out
 
+
     def get_parameter_list(self):
         if isinstance(self, torch.nn.DataParallel) or isinstance(self, torch.nn.parallel.DistributedDataParallel):
             return self.module.parameter_list

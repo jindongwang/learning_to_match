@@ -76,12 +76,12 @@ class L2MTrainer(object):
             inputs_source, inputs_target, labels_source = inputs_source.cuda(
             ), inputs_target.cuda(), labels_source.cuda(),
             inputs = torch.cat((inputs_source, inputs_target), dim=0)
-            classifier_loss, cond_loss, mar_loss, feat, logits, _ = self.model.get_loss(
+            feat, logits, _, _, _, classifier_loss, mar_loss, cond_loss = self.model(
                 inputs, labels_source)
             m_feat = self.model.match_feat(cond_loss, mar_loss, feat, logits)
 
             gloss = self.gnet(m_feat).mean()
-            total_loss = classifier_loss + gloss
+            total_loss = classifier_loss + 0.5 * mar_loss
 
             self.optimizer_m.zero_grad()
             total_loss.backward()
@@ -115,12 +115,12 @@ class L2MTrainer(object):
                     continue
                 inputs_tmp = torch.cat((inputs_source, meta_data), dim=0)
 
-                _, cond_loss, mar_loss, feat, logits, out_prob = self.model_old.get_loss(
+                feat, logits, _, _, _, classifier_loss, mar_loss, cond_loss = self.model_old(
                     inputs_tmp, labels_source)
                 m_feat = self.model_old.match_feat(cond_loss, mar_loss, feat, logits)
                 g_loss_pre = self.gnet(m_feat).mean()
 
-                _, cond_loss2, mar_loss2, feat2, logits2, out_prob2 = self.model.get_loss(
+                feat2, logits2, _, _, _, classifier_loss2, mar_loss2, cond_loss2 = self.model(
                     inputs_tmp, labels_source)
                 m_feat2 = self.model.match_feat(
                     cond_loss2, mar_loss2, feat2, logits2)
@@ -146,10 +146,10 @@ class L2MTrainer(object):
         stop = 0
         mxacc = 0
         while True:
-            self.model_old.net.load_state_dict(self.model.net.state_dict())
+            self.model_old.load_state_dict(self.model.state_dict())
             self.gnet.train()
-            self.model_old.net.train()
-            self.model.net.train()
+            self.model_old.train()
+            self.model.train()
 
             # construct meta_loader from target_loader before each epoch
             if epoch == 0:
@@ -166,8 +166,8 @@ class L2MTrainer(object):
 
             # update gnet
             diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = 0, 0, 0, 0, 0
-            diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(
-                    self.train_source_loader, self.meta_loader)
+            # diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(
+            #         self.train_source_loader, self.meta_loader)
 
             self.vis.plot_line([mar_loss, mar_loss2], epoch,
                                title="MMD", legend=["old", "new"])
@@ -176,7 +176,7 @@ class L2MTrainer(object):
 
             # self.pprint(self.gnet(self.a).mean())
 
-            # print(self.model.net.classifier_layer[0].weight.grad.sum())
+            # print(self.model.classifier_layer[0].weight.grad.sum())
             # print(self.gnet.out.weight.grad.sum())
             # Shuffle dataset
             kwargs = {'num_workers': 4, 'pin_memory': True}
@@ -196,19 +196,19 @@ class L2MTrainer(object):
             calcf1 = True if self.config.dataset.lower(
             ) in ['covid-19', 'covid', 'covid19'] else False
             ret = evaluate(self.model, self.test_target_loader, calcf1=calcf1)
-            acc = ret["metr"]["f1"] if calcf1 else ret["accuracy"]
+            acc = ret["f1"] if calcf1 else ret["accuracy"]
             if acc >= mxacc:
                 stop = 0
                 mxacc = acc
-                torch.save(self.model.net.state_dict(),
+                torch.save(self.model.state_dict(),
                            self.save_path.replace('.log', '.mdl'))
             if not calcf1:
                 self.pprint(
                     f"[Epoch:{epoch:02d}], cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, acc:{acc:.4f}, mxacc:{mxacc:.4f}")
             else:
                 self.pprint(
-                    f"[Epoch:{epoch:02d}], acc: {ret['accuracy']:.4f}, mxacc: {mxacc:.4f}")
-                self.pprint(ret["metr"])
+                    f"[Epoch:{epoch:02d}], cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, acc: {ret['accuracy']:.4f}, mxf1: {mxacc:.4f}")
+                self.pprint(ret)
             epoch += 1
 
             if iter_num >= self.max_iter:
@@ -293,22 +293,25 @@ class INVScheduler(object):
 
 
 def get_softlabel(model, loader):
-    model.net.eval()
+    model.eval()
+    model.eval()
+    all_probs, all_labels, all_preds = None, None, None
     first_test = True
-    all_probs = None
-    for datat in loader:
-        inputs_t, _ = datat
-        inputs_t = inputs_t.cuda()
-        probabilities = model.predict(inputs_t)
-        probabilities = probabilities.data.float()
-        if first_test:
-            all_probs = probabilities
-            first_test = False
-        else:
-            all_probs = torch.cat((all_probs, probabilities), 0)
-    prob, predict = torch.max(all_probs, 1)
-    model.net.train()
-    return prob, predict
+    with torch.no_grad():
+        for data, label in loader:
+            data, label = data.cuda(), label.cuda()
+            probs, _, preds = model.predict(data)
+            if first_test:
+                all_probs = probs.data.float()
+                all_labels = label.data.float()
+                all_preds = preds.data.float()
+                first_test = False
+            else:
+                all_probs = torch.cat((all_probs, probs), 0)
+                all_labels = torch.cat((all_labels, label), 0)
+                all_preds = torch.cat((all_preds, preds), 0)
+    model.train()
+    return all_probs, all_preds
 
 
 def generate_metadata(m, loader):
@@ -374,41 +377,29 @@ def set_require_grad(model, grad=True):
 
 
 def evaluate(model, input_loader, calcf1=False):
-    model.net.eval()
-    num_iter = len(input_loader)
-    iter_test = iter(input_loader)
+    model.eval()
+    all_probs, all_labels, all_preds = None, None, None
     first_test = True
-    all_probs, all_labels = None, None
-    for _ in range(num_iter):
-        data = iter_test.next()
-        inputs = data[0]
-        labels = data[1]
-        inputs = inputs.cuda()
-        labels = labels.cuda()
-        probabilities = model.predict(inputs)
-        probabilities = probabilities.data.float()
-        labels = labels.data.float()
-        if first_test:
-            all_probs = probabilities
-            all_labels = labels
-            first_test = False
-        else:
-            all_probs = torch.cat((all_probs, probabilities), 0)
-            all_labels = torch.cat((all_labels, labels), 0)
-    ret = {}
-    probs, predict = torch.max(all_probs, 1)
-    if calcf1:
-        metr = metric(
-            all_labels.cpu().detach().numpy(),
-            predict.cpu().detach().numpy(),
-            probs.cpu().detach().numpy(),
-        )
-        ret["metr"] = metr
+    with torch.no_grad():
+        for data, label in input_loader:
+            data, label = data.cuda(), label.cuda()
+            probs, _, preds = model.predict(data)
+            if first_test:
+                all_probs = probs.data.float()
+                all_labels = label.data.float()
+                all_preds = preds.data.float()
+                first_test = False
+            else:
+                all_probs = torch.cat((all_probs, probs), 0)
+                all_labels = torch.cat((all_labels, label), 0)
+                all_preds = torch.cat((all_preds, preds), 0)
     accuracy = torch.sum(
-        torch.squeeze(predict).float() == all_labels).item() / float(
+        torch.squeeze(all_preds).float() == all_labels).item() / float(
             all_labels.size()[0])
-    model.net.train()
+    ret = {}
     ret["accuracy"] = accuracy
+    if calcf1:
+        ret = metric(all_labels.cpu().detach().numpy(), all_preds.cpu().detach().numpy(), all_probs.cpu().detach().numpy())
     return ret
 
 
