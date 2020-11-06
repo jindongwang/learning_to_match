@@ -65,6 +65,7 @@ def get_data_config(dataset_name):
         is_cen = False
         args.source_dir = 'train'
         args.test_dir = 'validation'
+        args.save_path = 'visda.mdl'
     elif dataset_name.lower() in ['covid-19', 'covid', 'covid19']:
         class_num = 2
         width = 512
@@ -93,8 +94,9 @@ def init_gnet(width, class_num):
     elif args.match_feat_type == 6:
         input_gnet = width + 1
     assert (input_gnet != 0), 'GNet error!'
-    gnet = GNetGram(args.batch_size ** 2, [512, 256], 1, use_set=True, drop_out=.5, mono=True, init_net=False)
-    # gnet = GNet(input_gnet, [512, 256], 1, use_set=True, drop_out=.5, mono=False, init_net=True)
+    # gnet = GNetGram(args.batch_size ** 2, [512, 256], 1, use_set=True, drop_out=.5, mono=False, init_net=True)
+    gnet = GNet(input_gnet, [512, 256], 1, use_set=True,
+                drop_out=.5, mono=False, init_net=True)
     return gnet
 
 
@@ -108,22 +110,22 @@ def get_args():
             raise argparse.ArgumentTypeError('Unsupported value encountered.')
     parser = argparse.ArgumentParser()
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--dataset', default='Office-Home', type=str,
+    parser.add_argument('--dataset', default='covid', type=str,
                         help='which dataset')
     parser.add_argument('--seed', type=int, default=3, metavar='S',
                         help='random seed (default: 3)')
-    parser.add_argument('--root_path', type=str, default="/home/jindwang/mine/data/OfficeHome",
+    parser.add_argument('--root_path', type=str, default="/home/jindwang/mine/data/covid_folder",
                         help='the path to load the data')
-    parser.add_argument('--source_dir', type=str, default="Art",
+    parser.add_argument('--source_dir', type=str, default="pneumonia",
                         help='the name of the source dir')
-    parser.add_argument('--test_dir', type=str, default="Clipart",
+    parser.add_argument('--test_dir', type=str, default="covid",
                         help='the name of the test dir')
-    parser.add_argument('--save_path', type=str, default="AC.mdl",
+    parser.add_argument('--save_path', type=str, default="covid.mdl",
                         help='the path to save the trained model')
     parser.add_argument('--save_folder', type=str, default='outputs')
     parser.add_argument('--use_adv', type=str2bool,
                         nargs='?', const=True, default=False)
-    parser.add_argument('--match_feat_type', type=int, default=0, choices=[0,1,2,3,4,5],
+    parser.add_argument('--match_feat_type', type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
                         help="""0: feature;
                                 1: logits;
                                 2: conditional loss + marginal loss;
@@ -171,15 +173,17 @@ if __name__ == '__main__':
     pprint(vars(args))
 
     gnet = init_gnet(1024, class_num)
-    basenet = 'ResNet18' if args.dataset == 'Covid-19' else 'ResNet50'
+    basenet = 'ResNet18' if args.dataset.lower(
+    ) in ['covid-19', 'covid', 'covid19'] else 'ResNet50'
 
     model_old = L2M(base_net=basenet, bottleneck_dim=1024, width=256,
-                           class_num=class_num, srcweight=srcweight, use_adv=args.use_adv, match_feat_type=args.match_feat_type, dataset=args.dataset, cat_feature=args.cat_feature)
-    model = L2M(base_net=basenet, bottleneck_dim=1024, width=256,
-                       class_num=class_num, srcweight=srcweight, use_adv=args.use_adv, match_feat_type=args.match_feat_type, dataset=args.dataset, cat_feature=args.cat_feature)
+                    class_num=class_num, use_adv=args.use_adv, match_feat_type=args.match_feat_type)
+    model = L2M(base_net=basenet, bottleneck_dim=1024, width=256, class_num=class_num,
+                use_adv=args.use_adv, match_feat_type=args.match_feat_type)
+
     gnet = gnet.cuda()
-    model.net = model.net.cuda()
-    model_old.net = model_old.net.cuda()
+    model = model.cuda()
+    model_old = model_old.cuda()
 
     # controls multi-gpu training
     if args.multi_gpu:
