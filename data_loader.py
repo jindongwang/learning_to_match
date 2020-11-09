@@ -7,7 +7,7 @@ from torchvision import transforms
 import os
 from PIL import Image
 from torch.utils.data.sampler import SubsetRandomSampler
-# from skimage import io
+from skimage import io
 
 
 class PlaceCrop(object):
@@ -158,3 +158,35 @@ def load_train_valid_split(dataset, batch_size, kwargs, val_ratio=0.4):
     validation_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size,
                                                     sampler=valid_sampler, **kwargs, drop_last=True)
     return train_loader, validation_loader
+
+# Dataloader class for meta data
+class MetaDataset(data.Dataset):
+    def __init__(self, meta_info) -> None:
+        self.meta_info = meta_info
+        normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.transform = transforms.Compose(
+            [ResizeImage(256),
+             transforms.Resize(256),
+             transforms.CenterCrop(224),
+             transforms.RandomHorizontalFlip(),
+             transforms.ToTensor(),
+             normalize])
+
+    def __getitem__(self, index: int):
+        data = io.imread(self.meta_info[index][0])
+        data = Image.fromarray(data)
+        if data.getbands()[0] == 'L' or len(data.getbands()) > 3:
+            data = data.convert('RGB')
+        data = self.transform(data)
+        label = self.meta_info[index][1]
+        return data, label
+
+    def __len__(self):
+        return len(self.meta_info)
+
+
+def load_metadata(meta_dataset, batch_size=8):
+    meta_loader = torch.utils.data.DataLoader(
+        meta_dataset, batch_size=batch_size, shuffle=True, drop_last=False)
+    return meta_loader

@@ -94,9 +94,9 @@ def init_gnet(width, class_num):
     elif args.match_feat_type == 6:
         input_gnet = width + 1
     assert (input_gnet != 0), 'GNet error!'
-    # gnet = GNetGram(args.batch_size ** 2, [512, 256], 1, use_set=True, drop_out=.5, mono=False, init_net=True)
-    gnet = GNet(input_gnet, [512, 256], 1, use_set=True,
-                drop_out=.5, mono=False, init_net=True)
+    gnet = GNetGram(args.batch_size ** 2, [512, 256], 1, use_set=True, drop_out=.5, mono=False, init_net=True)
+    # gnet = GNet(input_gnet, [512, 256], 1, use_set=True,
+    #             drop_out=.5, mono=False, init_net=True)
     return gnet
 
 
@@ -109,7 +109,7 @@ def get_args():
         else:
             raise argparse.ArgumentTypeError('Unsupported value encountered.')
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--dataset', default='covid', type=str,
                         help='which dataset')
     parser.add_argument('--seed', type=int, default=3, metavar='S',
@@ -133,7 +133,7 @@ def get_args():
                                 4: logits + conditional loss + marginal loss
                                 5: logits + feature + cond + marg loss (ALL)""")
     parser.add_argument('--init_lr', type=float, default=0.004)
-    parser.add_argument('--glr', type=float, default=0.01,
+    parser.add_argument('--glr', type=float, default=0.0005,
                         help='learning rate for gnet')
     parser.add_argument('--gamma', type=float, default=0.001)
     parser.add_argument('--decay_rate', type=float, default=0.75)
@@ -147,7 +147,7 @@ def get_args():
     parser.add_argument('--early_stop', type=int, default=20)
     parser.add_argument('--exp', type=str, default='l2m')
     parser.add_argument('--gopt', type=str, default='sgd')
-
+    parser.add_argument('--meta_m', type=int, default=8)
     args = parser.parse_args()
     return args
 
@@ -190,9 +190,9 @@ if __name__ == '__main__':
         device_ids = [0, 1]
         gnet = torch.nn.DataParallel(gnet, device_ids)
         model.net = torch.nn.DataParallel(
-            model.net, device_ids)
+            model, device_ids)
         model_old.net = torch.nn.DataParallel(
-            model_old.net, device_ids)
+            model_old, device_ids)
 
     train_source_loader, train_target_loader, test_target_loader = load_data(
         args.root_path, args.source_dir, args.test_dir, args.batch_size)
