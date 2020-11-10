@@ -58,8 +58,8 @@ def get_data_config(dataset_name):
         width = 2048
         srcweight = 2
         is_cen = False
-    elif dataset_name.lower() in ['visda', 'visda17', 'visda-17']:
-        class_num = 12
+    elif dataset_name.lower() in ['visda', 'visda17', 'visda-17', 'visda_binary']:
+        class_num = 2
         width = 2048
         srcweight = 3
         is_cen = False
@@ -73,7 +73,7 @@ def get_data_config(dataset_name):
         is_cen = False
         args.source_dir = 'pneumonia'
         args.test_dir = 'covid'
-        args.save_path = 'covid.mdl'
+        # args.save_path = 'covid.mdl'
     return class_num, width, srcweight, is_cen
 
 
@@ -94,7 +94,10 @@ def init_gnet(width, class_num):
     elif args.match_feat_type == 6:
         input_gnet = width + 1
     assert (input_gnet != 0), 'GNet error!'
-    gnet = GNetGram(args.batch_size ** 2, [512, 256], 1, use_set=True, drop_out=.5, mono=False, init_net=True)
+    # gnet = GNetGram(2 * args.meta_m ** 2, [256, 128], 1,
+    #                 use_set=True, drop_out=.5, mono=False, init_net=True)
+    gnet = GNetGram(args.gbatch ** 2, [128, 64], 1,
+                    use_set=True, drop_out=.5, mono=False, init_net=True)
     # gnet = GNet(input_gnet, [512, 256], 1, use_set=True,
     #             drop_out=.5, mono=False, init_net=True)
     return gnet
@@ -109,7 +112,7 @@ def get_args():
         else:
             raise argparse.ArgumentTypeError('Unsupported value encountered.')
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--dataset', default='covid', type=str,
                         help='which dataset')
     parser.add_argument('--seed', type=int, default=3, metavar='S',
@@ -147,16 +150,22 @@ def get_args():
     parser.add_argument('--early_stop', type=int, default=20)
     parser.add_argument('--exp', type=str, default='l2m')
     parser.add_argument('--gopt', type=str, default='sgd')
-    parser.add_argument('--meta_m', type=int, default=8)
+    parser.add_argument('--meta_m', type=int, default=4)
+    parser.add_argument('--gbatch', type=int, default=8)
     args = parser.parse_args()
     return args
 
 
 if __name__ == '__main__':
+
     args = get_args()
-    class_num, width, srcweight, is_cen = get_data_config(args.dataset)
+
+
+    class_num, width, srcweight, is_cen = get_data_config(
+        args.dataset)
     assert (class_num != -1), 'Dataset name error!'
-    assert (args.match_feat_type <= 6), 'option match_feat_type error!'
+    assert (args.match_feat_type <=
+            6), 'option match_feat_type error!'
 
     # controls random seed
     np.random.seed(args.seed)

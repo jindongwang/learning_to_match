@@ -3,7 +3,7 @@ import torch.nn as nn
 from . import MLP
 from utils.pdist import pdist
 
-# GNet: version 3, using gram matrix
+# GNet: using gram matrix
 class GNetGram(nn.Module):
     def __init__(self, n_input, n_hiddens, n_output, use_set=True, drop_out=0, mono=False, init_net=True):
         """Init func for GNet with Gram matrix
@@ -25,6 +25,22 @@ class GNetGram(nn.Module):
         gram = pdist(x[:x.size(0) // 2], x[x.size(0) // 2:])
         flatten = gram.view(-1)
         out = self.net(flatten)
+        out = torch.tanh(out)
+        return out
+
+    def forward2(self, x, y):
+        xs, ys = x[:x.size(0) // 2], y[:y.size(0) // 2]
+        xt, yt = x[x.size(0) // 2:], y[y.size(0) // 2:]
+        gram = torch.ones(1).cuda()
+        label_set = torch.unique(y)
+        for c in label_set:
+            ind = ys == c
+            xs_c, ys_c = xs[ind], ys[ind]
+            ind = yt == c
+            xt_c, yt_c = xt[ind], yt[ind]
+            gram_c = pdist(xs_c, xt_c).view(-1)
+            gram = torch.cat((gram, gram_c))
+        out = self.net(gram[1:])
         out = torch.tanh(out)
         return out
 
