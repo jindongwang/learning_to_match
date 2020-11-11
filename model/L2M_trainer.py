@@ -77,10 +77,10 @@ class L2MTrainer(object):
             # update gnet
             # construct meta_loader from target_loader before each epoch
             diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = 0, 0, 0, 0, 0
-            # if epoch > 0:
-            #     self.load_meta_data(epoch)
-            #     diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(
-            #         self.meta_source, self.meta_loader)
+            if epoch > 5:
+                self.load_meta_data(epoch)
+                diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(
+                    self.meta_source, self.meta_loader)
 
             self.vis.plot_line([mar_loss, mar_loss2], epoch,
                                title="MMD", legend=["old", "new"])
@@ -147,9 +147,9 @@ class L2MTrainer(object):
             feat, logits, _, _, _, classifier_loss, mar_loss, cond_loss = self.model(
                 inputs, labels_source)
             m_feat = self.model.match_feat(cond_loss, mar_loss, feat, logits)
-            # gloss = self.gnet(m_feat).mean()
-            gloss = torch.tensor(0)
-            total_loss = classifier_loss
+            gloss = self.gnet(m_feat).mean()
+            # gloss = torch.tensor(0)
+            total_loss = classifier_loss + self.config.lamb * mar_loss + self.config.mu * gloss
 
             self.optimizer_m.zero_grad()
             total_loss.backward()

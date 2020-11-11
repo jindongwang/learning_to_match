@@ -152,17 +152,15 @@ def get_args():
     parser.add_argument('--gopt', type=str, default='sgd')
     parser.add_argument('--meta_m', type=int, default=4)
     parser.add_argument('--gbatch', type=int, default=8)
+    parser.add_argument('--lamb', type=float, default=5)
+    parser.add_argument('--mu', type=float, default=10)
     args = parser.parse_args()
     return args
 
 
 if __name__ == '__main__':
-
     args = get_args()
-
-
-    class_num, width, srcweight, is_cen = get_data_config(
-        args.dataset)
+    class_num, width, srcweight, is_cen = get_data_config(args.dataset)
     assert (class_num != -1), 'Dataset name error!'
     assert (args.match_feat_type <=
             6), 'option match_feat_type error!'
