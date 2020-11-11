@@ -154,6 +154,8 @@ def get_args():
     parser.add_argument('--gbatch', type=int, default=8)
     parser.add_argument('--lamb', type=float, default=5)
     parser.add_argument('--mu', type=float, default=10)
+    parser.add_argument('--test', type=str2bool, nargs='?', const=True, default=False)
+    parser.add_argument('--test_model_file', type=str, default='model.mdl')
     args = parser.parse_args()
     return args
 
@@ -206,4 +208,12 @@ if __name__ == '__main__':
     dataloaders = train_source_loader, train_target_loader, test_target_loader
 
     trainer = L2MTrainer(gnet, model, model_old, dataloaders, args)
-    trainer.train()
+    if not args.test:
+        trainer.train()
+    else:
+        test_path = os.path.join('/home/jindwang/mine/code/learning_to_match/outputs', args.test_model_file)
+        model.load_state_dict(torch.load(test_path))
+        calcf1 = True if args.dataset.lower() in ['covid-19', 'covid', 'covid19', 'visda'] else False
+        ret = trainer.evaluate(model, test_target_loader, calcf1=calcf1)
+        print('Test result:')
+        print(ret)
