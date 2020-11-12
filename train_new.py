@@ -58,8 +58,8 @@ def get_data_config(dataset_name):
         width = 2048
         srcweight = 2
         is_cen = False
-    elif dataset_name.lower() in ['visda', 'visda17', 'visda-17', 'visda_binary']:
-        class_num = 2
+    elif dataset_name.lower() in ['visda', 'visda17', 'visda-17']:
+        class_num = 12
         width = 2048
         srcweight = 3
         is_cen = False
@@ -73,7 +73,15 @@ def get_data_config(dataset_name):
         is_cen = False
         args.source_dir = 'pneumonia'
         args.test_dir = 'covid'
-        # args.save_path = 'covid.mdl'
+        args.save_path = 'covid.mdl'
+    elif dataset_name.lower() in ['visda-binary', 'vbinary']:
+        class_num = 2
+        width = 2048
+        srcweight = 3
+        is_cen = False
+        args.source_dir = 'train'
+        args.test_dir = 'validation'
+        args.save_path = 'visda-binary.mdl'
     return class_num, width, srcweight, is_cen
 
 
@@ -115,7 +123,7 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--dataset', default='covid', type=str,
                         help='which dataset')
-    parser.add_argument('--seed', type=int, default=3, metavar='S',
+    parser.add_argument('--seed', type=int, default=52, metavar='S',
                         help='random seed (default: 3)')
     parser.add_argument('--root_path', type=str, default="/home/jindwang/mine/data/covid_folder",
                         help='the path to load the data')
@@ -150,10 +158,10 @@ def get_args():
     parser.add_argument('--early_stop', type=int, default=20)
     parser.add_argument('--exp', type=str, default='l2m')
     parser.add_argument('--gopt', type=str, default='sgd')
-    parser.add_argument('--meta_m', type=int, default=4)
-    parser.add_argument('--gbatch', type=int, default=8)
-    parser.add_argument('--lamb', type=float, default=5)
-    parser.add_argument('--mu', type=float, default=10)
+    parser.add_argument('--meta_m', type=int, default=8)
+    parser.add_argument('--gbatch', type=int, default=16)
+    parser.add_argument('--lamb', type=float, default=10)
+    parser.add_argument('--mu', type=float, default=0.01)
     parser.add_argument('--test', type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument('--test_model_file', type=str, default='model.mdl')
     args = parser.parse_args()

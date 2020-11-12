@@ -26,6 +26,9 @@ class GNetGram(nn.Module):
         flatten = gram.view(-1)
         out = self.net(flatten)
         out = torch.tanh(out)
+        # out = torch.sigmoid(out)
+        # out = torch.nn.Softplus()(out)
+        # out = torch.nn.ReLU()(out)
         return out
 
     def forward2(self, x, y):

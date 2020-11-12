@@ -89,7 +89,7 @@ class L2MTrainer(object):
 
             stop += 1
             calcf1 = True if self.config.dataset.lower(
-            ) in ['covid-19', 'covid', 'covid19', 'visda'] else False
+            ) in ['covid-19', 'covid', 'covid19', 'visda-binary', 'vbinary'] else False
             ret = self.evaluate(
                 self.model, self.test_target_loader, calcf1=calcf1)
             acc = ret["f1"] if calcf1 else ret["accuracy"]
@@ -117,8 +117,11 @@ class L2MTrainer(object):
                 self.pprint("=================Early stop!!")
                 break
         self.pprint(f"Max result: {mxacc}")
-        self.pprint(
-            f"P: {best_res['p']:.4f}, R: {best_res['r']:.4f}, f1: {best_res['f1']:.4f}, acc: {best_res['accuracy']:.4f}, auc: {best_res['auc']:.4f}")
+        if calcf1:
+            self.pprint(
+                f"P: {best_res['p']:.4f}, R: {best_res['r']:.4f}, f1: {best_res['f1']:.4f}, acc: {best_res['accuracy']:.4f}, auc: {best_res['auc']:.4f}")
+        else:
+            self.pprint(f"acc: {best_res['accuracy']:.4f}")
         self.pprint("Train is finished!")
 
     def update_main_model(self, src_train_loader, tar_train_loader):
@@ -214,12 +217,12 @@ class L2MTrainer(object):
     def load_meta_data(self, epoch):
         kwargs = {'num_workers': 4, 'pin_memory': True}
         train_val_split = -1
-        self.config.seed = epoch * 2
-        np.random.seed(self.config.seed)
-        torch.manual_seed(self.config.seed)
-        random.seed(self.config.seed)
-        torch.cuda.manual_seed(self.config.seed)
-        torch.cuda.manual_seed_all(self.config.seed)
+        seed = epoch * 2
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        random.seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
         self.meta_source_loader = data_loader.load_testing(
             self.config.root_path, self.config.source_dir, self.config.batch_size, kwargs)
         self.train_source_loader = data_loader.load_training(
@@ -276,7 +279,7 @@ class L2MTrainer(object):
                 elif select_mode == 'top':
                     probs_conf = imgs_cls[:, 2]
                     ind = probs_conf.argsort()
-                    imgs_select_cls = imgs_cls[ind[::-1]]
+                    imgs_select_cls = imgs_cls[ind]
                     imgs_select_cls = imgs_select_cls[:m]
             elif len(imgs_cls) > 0:
                 imgs_select_cls = imgs_cls
