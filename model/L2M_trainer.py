@@ -281,7 +281,7 @@ class L2MTrainer(object):
                 elif select_mode == 'top':
                     probs_conf = imgs_cls[:, 2]
                     ind = probs_conf.argsort()
-                    imgs_select_cls = imgs_cls[ind]
+                    imgs_select_cls = imgs_cls[ind[::-1]]
                     imgs_select_cls = imgs_select_cls[:m]
             elif len(imgs_cls) > 0:
                 imgs_select_cls = imgs_cls
