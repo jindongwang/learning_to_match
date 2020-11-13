@@ -188,5 +188,5 @@ class MetaDataset(data.Dataset):
 
 def load_metadata(meta_dataset, batch_size=8):
     meta_loader = torch.utils.data.DataLoader(
-        meta_dataset, batch_size=batch_size, shuffle=True, drop_last=False)
+        meta_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     return meta_loader

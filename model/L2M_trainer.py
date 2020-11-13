@@ -89,7 +89,7 @@ class L2MTrainer(object):
 
             stop += 1
             calcf1 = True if self.config.dataset.lower(
-            ) in ['covid-19', 'covid', 'covid19', 'visda-binary', 'vbinary'] else False
+            ) in ['covid-19', 'covid', 'covid19', 'visda-binary', 'vbinary', 'bac', 'viral'] else False
             ret = self.evaluate(
                 self.model, self.test_target_loader, calcf1=calcf1)
             acc = ret["f1"] if calcf1 else ret["accuracy"]
@@ -153,6 +153,8 @@ class L2MTrainer(object):
             gloss = self.gnet(m_feat).mean()
             # gloss = torch.tensor(0)
             total_loss = classifier_loss + self.config.lamb * mar_loss + self.config.mu * gloss
+            # total_loss = classifier_loss
+            # total_loss = classifier_loss + self.config.lamb * mar_loss
 
             self.optimizer_m.zero_grad()
             total_loss.backward()
