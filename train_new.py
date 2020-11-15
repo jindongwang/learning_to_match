@@ -255,13 +255,7 @@ if __name__ == '__main__':
 
         from gradcam_vis import visualize_cam, Normalize, GradCAM, GradCAMpp
         img_dir = '/home/jindwang/mine/data/covid_folder/covid/0/'
-        # img_name = 'collies.JPG'
-        # img_name = 'multiple_dogs.jpg'
-        # img_name = 'snake.JPEG'
-        # img_name = 'ciaa199.pdf-001-a.png'
         for file in glob.glob(os.path.join(img_dir, '*')):
-        # img_name = 'COVID-19 (4).png'
-        # img_path = os.path.join(img_dir, img_name)
             print(file)
             img_path = file
             img_name = img_path.split('/')[-1]
