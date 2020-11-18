@@ -238,71 +238,72 @@ if __name__ == '__main__':
     else:
         test_path = os.path.join('/home/jindwang/mine/code/learning_to_match/outputs', args.test_model_file)
         model.load_state_dict(torch.load(test_path))
-        # calcf1 = True if args.dataset.lower() in ['covid-19', 'covid', 'covid19', 'visda'] else False
-        # ret = trainer.evaluate(model, test_target_loader, calcf1=calcf1)
-        # print(trainer.inference(model, test_target_loader))
-        # print('Test result:')
-        # print(ret)
+        calcf1 = True if args.dataset.lower() in ['covid-19', 'covid', 'covid19', 'visda', 'bac', 'viral'] else False
+        ret = trainer.evaluate(model, test_target_loader, calcf1=calcf1)
+        print(trainer.inference(model, test_target_loader))
+        print('Test result:')
+        print(ret)
+        
 
-        import os
-        import PIL
-        import numpy as np
-        import torch
-        import torch.nn.functional as F
-        import torchvision.models as models
-        from torchvision.utils import make_grid, save_image
-        import glob
+        # import os
+        # import PIL
+        # import numpy as np
+        # import torch
+        # import torch.nn.functional as F
+        # import torchvision.models as models
+        # from torchvision.utils import make_grid, save_image
+        # import glob
 
-        from gradcam_vis import visualize_cam, Normalize, GradCAM, GradCAMpp
-        img_dir = '/home/jindwang/mine/data/covid_folder/covid/0/'
-        for file in glob.glob(os.path.join(img_dir, '*')):
-            print(file)
-            img_path = file
-            img_name = img_path.split('/')[-1]
+        # from gradcam_vis import visualize_cam, Normalize, GradCAM, GradCAMpp
+        # img_dir = '/home/jindwang/mine/data/covid_folder/covid/0/'
+        # for file in glob.glob(os.path.join(img_dir, '*')):
+        #     print(file)
+        #     img_path = file
+        #     img_name = img_path.split('/')[-1]
 
-            pil_img = PIL.Image.open(img_path)
-            pil_img = pil_img.convert('RGB')
-            normalizer = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            torch_img = torch.from_numpy(np.asarray(pil_img)).permute(2, 0, 1).unsqueeze(0).float().div(255)
-            torch_img = F.upsample(torch_img, size=(224, 224), mode='bilinear', align_corners=False)
-            normed_torch_img = normalizer(torch_img)
+        #     pil_img = PIL.Image.open(img_path)
+        #     pil_img = pil_img.convert('RGB')
+        #     normalizer = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        #     torch_img = torch.from_numpy(np.asarray(pil_img)).permute(2, 0, 1).unsqueeze(0).float().div(255)
+        #     torch_img = F.upsample(torch_img, size=(224, 224), mode='bilinear', align_corners=False)
+        #     normed_torch_img = normalizer(torch_img)
 
-            resnet = models.resnet18(pretrained=False)
-            model = model.cpu()
-            resnet.conv1 = model.base_network.conv1
-            resnet.bn1 = model.base_network.bn1
-            resnet.relu = model.base_network.relu
-            resnet.maxpool = model.base_network.maxpool
-            resnet.layer1 = model.base_network.layer1
-            resnet.layer2 = model.base_network.layer2
-            resnet.layer3 = model.base_network.layer3
-            resnet.layer4 = model.base_network.layer4
-            resnet.avgpool = model.base_network.avgpool
-            resnet.eval()
-            cam_dict = dict()
-            resnet_model_dict = dict(type='resnet', arch=resnet, layer_name='layer4', input_size=(224, 224))
-            resnet_gradcam = GradCAM(resnet_model_dict, True)
-            resnet_gradcampp = GradCAMpp(resnet_model_dict, True)
-            cam_dict['resnet'] = [resnet_gradcam, resnet_gradcampp]
+        #     resnet = models.resnet18(pretrained=False)
+        #     model = model.cpu()
+        #     resnet.conv1 = model.base_network.conv1
+        #     resnet.bn1 = model.base_network.bn1
+        #     resnet.relu = model.base_network.relu
+        #     resnet.maxpool = model.base_network.maxpool
+        #     resnet.layer1 = model.base_network.layer1
+        #     resnet.layer2 = model.base_network.layer2
+        #     resnet.layer3 = model.base_network.layer3
+        #     resnet.layer4 = model.base_network.layer4
+        #     resnet.avgpool = model.base_network.avgpool
+        #     resnet.eval()
+        #     cam_dict = dict()
+        #     resnet_model_dict = dict(type='resnet', arch=resnet, layer_name='layer4', input_size=(224, 224))
+        #     resnet_gradcam = GradCAM(resnet_model_dict, True)
+        #     resnet_gradcampp = GradCAMpp(resnet_model_dict, True)
+        #     cam_dict['resnet'] = [resnet_gradcam, resnet_gradcampp]
 
-            images = []
-            for gradcam, gradcam_pp in cam_dict.values():
-                mask, _ = gradcam(normed_torch_img)
-                heatmap, result = visualize_cam(mask.cpu(), torch_img)
+        #     images = []
+        #     for gradcam, gradcam_pp in cam_dict.values():
+        #         mask, _ = gradcam(normed_torch_img)
+        #         heatmap, result = visualize_cam(mask.cpu(), torch_img)
 
-                mask_pp, _ = gradcam_pp(normed_torch_img)
-                heatmap_pp, result_pp = visualize_cam(mask_pp, torch_img)
+        #         mask_pp, _ = gradcam_pp(normed_torch_img)
+        #         heatmap_pp, result_pp = visualize_cam(mask_pp, torch_img)
                 
-                # images.append(torch.stack([torch_img.squeeze().cpu(), heatmap, heatmap_pp, result, result_pp], 0))
-                images.append(torch.stack([result], 0))
+        #         # images.append(torch.stack([torch_img.squeeze().cpu(), heatmap, heatmap_pp, result, result_pp], 0))
+        #         images.append(torch.stack([result], 0))
                 
-            images = make_grid(torch.cat(images, 0), nrow=5)
+        #     images = make_grid(torch.cat(images, 0), nrow=5)
 
-            output_dir = '/home/jindwang/mine/code/learning_to_match/outputs-vis/second-normal'
-            if not os.path.exists(output_dir):
-                os.mkdir(output_dir)
-            output_name = img_name
-            output_path = os.path.join(output_dir, output_name)
-            save_image(images, output_path)
+        #     output_dir = '/home/jindwang/mine/code/learning_to_match/outputs-vis/second-normal'
+        #     if not os.path.exists(output_dir):
+        #         os.mkdir(output_dir)
+        #     output_name = img_name
+        #     output_path = os.path.join(output_dir, output_name)
+        #     save_image(images, output_path)
             # PIL.Image.open(output_path)
 
