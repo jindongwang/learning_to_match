@@ -237,7 +237,7 @@ class L2MTrainer(object):
         self.meta_source = self.generate_metadata_soft(
             self.meta_m, self.meta_source_loader, self.model, self.config.gbatch, select_mode='top')
 
-    def generate_metadata_soft(self, m, loader, model, batch_size, select_mode='random', source=False):
+    def generate_metadata_soft(self, m, loader, model, batch_size, select_mode='top', source=False):
         """Generate meta data with soft labels
 
         Args:

@@ -151,7 +151,7 @@ def get_args():
                         help='the path to save the trained model')
     parser.add_argument('--save_folder', type=str, default='outputs')
     parser.add_argument('--use_adv', type=str2bool,
-                        nargs='?', const=True, default=False)
+                        nargs='?', const=True, default=True)
     parser.add_argument('--match_feat_type', type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
                         help="""0: feature;
                                 1: logits;
