@@ -188,5 +188,54 @@ class MetaDataset(data.Dataset):
 
 def load_metadata(meta_dataset, batch_size=8):
     meta_loader = torch.utils.data.DataLoader(
-        meta_dataset, batch_size=batch_size, shuffle=True, drop_last=False)
+        meta_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     return meta_loader
+
+
+# Dataloader class for medmnist
+class MedMNIST(data.Dataset):
+    def __init__(self, file_path, transform, domain) -> None:
+        data = np.load(file_path)
+        self.imgs = data[f"{domain}_images"]
+        self.labels = data[f"{domain}_labels"]
+        if file_path.__contains__('chest'):
+            self.labels = np.sum(self.labels, axis=1)
+        self.transform = transform
+
+    def __getitem__(self, index: int):
+        data = self.transform(Image.fromarray(self.imgs[index]))
+        label = self.labels[index]
+        label = 1 if label >= 1 else 0
+        return data, label
+
+    def __len__(self):
+        return len(self.labels)
+
+def load_medmnist(root_path, file_path, domain, batch_size=8, train=False):
+    """Load medmnist dataset
+
+    Args:
+        root_path (str): root path for data folder
+        file_path (str): filename
+        domain (str): 'train' | 'val' | 'test'
+        batch_size (int, optional): batchsize. Defaults to 8.
+        train (bool, optional): train or not. Defaults to False.
+
+    Returns:
+        dataloader: dataloader
+    """
+    normalize = transforms.Normalize(
+            mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+    transform = {'train': transforms.Compose(
+            [transforms.RandomHorizontalFlip(),
+             transforms.ToTensor(),
+             transforms.Lambda(lambda x: x.repeat(3, 1, 1)),
+             normalize]),
+             'test':transforms.Compose(
+            [transforms.ToTensor(),
+            transforms.Lambda(lambda x: x.repeat(3, 1, 1)),
+             normalize])}
+    dataset = MedMNIST(os.path.join(root_path, file_path), transform['train' if train else 'test'], domain)
+    dataloader = torch.utils.data.DataLoader(
+        dataset, batch_size=batch_size, shuffle=train, drop_last=train)
+    return dataloader
