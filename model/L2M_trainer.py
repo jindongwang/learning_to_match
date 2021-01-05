@@ -89,7 +89,7 @@ class L2MTrainer(object):
 
             stop += 1
             calcf1 = True if self.config.dataset.lower(
-            ) in ['covid-19', 'covid', 'covid19', 'visda-binary', 'vbinary'] else False
+            ) in ['covid-19', 'covid', 'covid19', 'visda-binary', 'vbinary', 'bac', 'viral'] else False
             ret = self.evaluate(
                 self.model, self.test_target_loader, calcf1=calcf1)
             acc = ret["f1"] if calcf1 else ret["accuracy"]
@@ -153,6 +153,8 @@ class L2MTrainer(object):
             gloss = self.gnet(m_feat).mean()
             # gloss = torch.tensor(0)
             total_loss = classifier_loss + self.config.lamb * mar_loss + self.config.mu * gloss
+            # total_loss = classifier_loss
+            # total_loss = classifier_loss + self.config.lamb * mar_loss
 
             self.optimizer_m.zero_grad()
             total_loss.backward()
@@ -235,7 +237,7 @@ class L2MTrainer(object):
         self.meta_source = self.generate_metadata_soft(
             self.meta_m, self.meta_source_loader, self.model, self.config.gbatch, select_mode='top')
 
-    def generate_metadata_soft(self, m, loader, model, batch_size, select_mode='random', source=False):
+    def generate_metadata_soft(self, m, loader, model, batch_size, select_mode='top', source=False):
         """Generate meta data with soft labels
 
         Args:
@@ -279,7 +281,7 @@ class L2MTrainer(object):
                 elif select_mode == 'top':
                     probs_conf = imgs_cls[:, 2]
                     ind = probs_conf.argsort()
-                    imgs_select_cls = imgs_cls[ind]
+                    imgs_select_cls = imgs_cls[ind[::-1]]
                     imgs_select_cls = imgs_select_cls[:m]
             elif len(imgs_cls) > 0:
                 imgs_select_cls = imgs_cls
