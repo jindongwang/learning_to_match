@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import data_loader
-from model import GNet, L2M, L2MTrainer, GNetGram
+from model import GNet, L2M, L2MTrainer, GNetGram, GNetTransformer
 import datetime
 import random
 import os
@@ -124,6 +124,8 @@ def init_gnet(width, class_num):
                     use_set=True, drop_out=.5, mono=False, init_net=True)
     # gnet = GNet(input_gnet, [512, 256], 1, use_set=True,
     #             drop_out=.5, mono=False, init_net=True)
+    # gnet = GNetTransformer(32 * 32, [128, 64], 1,
+    #                 use_set=True, drop_out=.5, mono=False, init_net=True)
     return gnet
 
 

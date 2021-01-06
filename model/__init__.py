@@ -2,8 +2,9 @@ from model.L2M import L2M
 from model.L2M_trainer import L2MTrainer
 from model.L2M_critic_trainer import L2MTrainerCritic
 from model.mlp import MLP
-from model.gnet import GNet, GNetGram
+from model.gnet import GNet, GNetGram, GNetTransformer
 from model.grl import GradReverse, GradientReverseLayer
+from model.attention import MultiHeadAttention
 
 __all__ = [
     'GNet',
@@ -13,5 +14,7 @@ __all__ = [
     'MLP',
     'GradReverse',
     'GradientReverseLayer',
-    'GNetGram'
+    'GNetGram',
+    'MultiHeadAttention',
+    'GNetTransformer'
 ]
