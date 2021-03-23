@@ -6,3 +6,4 @@
 *.pdf
 event*
 outputs-vis
+*pkl

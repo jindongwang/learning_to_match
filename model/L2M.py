@@ -1,16 +1,17 @@
-import torch.nn as nn
-import model.backbone as backbone
-import torch.nn.functional as F
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 from utils import mmd
 from model.grl import GradReverse
 from model.mlp import MLP
+import model.backbone as backbone
 
 '''
 L2M network.
 '''
 class L2M(nn.Module):
-    def __init__(self, base_net='ResNet50', bottleneck_dim=2048, width=2048, class_num=31, use_adv=True, match_feat_type=0):
+    def __init__(self, base_net='ResNet50', bottleneck_dim=2048, width=256, class_num=31, use_adv=True):
         """Init func
 
         Args:
@@ -23,32 +24,23 @@ class L2M(nn.Module):
         super(L2M, self).__init__()
         self.use_adv = use_adv
         self.n_class = class_num
-        self.match_feat_type = match_feat_type
-        # set base network
-        self.base_network = backbone.network_dict[base_net]()
-        self.bottleneck_layer = nn.Sequential(*[nn.Linear(self.base_network.output_num(), bottleneck_dim),
+        self.featurizer = backbone.network_dict[base_net]()
+        self.bottleneck_layer = nn.Sequential(*[nn.Linear(self.featurizer.output_num(), bottleneck_dim),
                                                 nn.BatchNorm1d(bottleneck_dim),
                                                 nn.ReLU(),
                                                 nn.Dropout(0.5, inplace=False)])
-        self.classifier_layer = nn.Sequential(*[nn.Linear(bottleneck_dim, width),
-                                                nn.ReLU(),
-                                                nn.Dropout(0.5),
-                                                nn.Linear(width, class_num)])
-        self.softmax = nn.Softmax(dim=1)
-        # initialization
+        self.classifier_layer = nn.Linear(bottleneck_dim, class_num)
+
         self.bottleneck_layer[0].weight.data.normal_(0, 0.005)
         self.bottleneck_layer[0].bias.data.fill_(0.1)
-        for dep in range(2):
-            self.classifier_layer[dep * 3].weight.data.normal_(0, 0.01)
-            self.classifier_layer[dep * 3].bias.data.fill_(0.0)
+        self.classifier_layer.weight.data.normal_(0, 0.01)
+        self.classifier_layer.bias.data.fill_(0.0)
 
-        self.parameter_list = [{"params": self.base_network.parameters(), "lr": 0.1},
+        self.parameter_list = [{"params": self.featurizer.parameters(), "lr": 0.1},
                                {"params": self.bottleneck_layer.parameters(), "lr": 1},
                                {"params": self.classifier_layer.parameters(), "lr": 1}]
 
         if self.use_adv:
-            self.classifier_layer_2 = MLP(
-                bottleneck_dim, [width], class_num, drop_out=.5)
             # DANN: add DANN, make L2M not only class-invariant (as conditional loss) but also domain invariant (as marginal loss)
             self.domain_classifier = MLP(
                 bottleneck_dim, [bottleneck_dim, width], 2, drop_out=.5)
@@ -58,52 +50,71 @@ class L2M(nn.Module):
                 bottleneck_dim, [bottleneck_dim, width], 2, drop_out=.5) for _ in range(class_num)])
 
             self.parameter_list.append(
-                {"params": self.classifier_layer_2.parameters(), "lr": 1})
-            self.parameter_list.append(
                 {"params": self.domain_classifier.parameters(), "lr": 1})
             self.parameter_list.append(
                 {"params": self.domain_classifier_class.parameters(), "lr": 1})
 
-    def forward(self, inputs, label_src):
+    def forward(self, inputs, label_src=None, compute_ada_loss=True):
         """Forward func
 
         Args:
             inputs (2d-array): raw inputs for both source and target domains
-
+            label_src (1d-array, default: None): source domain labels
+            compute_ada_loss (bool, default: False): compute adaptation loss or not
         Returns:
             outputs
         """
-        class_criterion = nn.CrossEntropyLoss()
-        f = self.base_network(inputs)
-        features = self.bottleneck_layer(f)
+        features = self.featurizer(inputs)
+        features = self.bottleneck_layer(features)
         out_logits = self.classifier_layer(features)
-        out_prob = self.softmax(out_logits)
+        out_prob = F.softmax(out_logits, dim=1)
         _, preds = torch.max(out_prob, 1)
-        loss_cls = class_criterion(out_logits[: label_src.size(0)], label_src)
+        loss_cls = 0 if label_src is None else F.cross_entropy(out_logits[: label_src.size(0)], label_src)
 
-        outputs_adv = None
         loss_mar, loss_cond = None, None
-        if self.use_adv:
-            feat_grl = GradReverse.apply(features, 1)
-            # compute DANN loss
-            loss_mar = self.dann(feat_grl)
-            
-            # compute class-wise DANN loss
-            pred_src, pred_tar = preds[:label_src.size(0)], preds[label_src.size(0):]
-            feat_src, feat_tar = feat_grl[: pred_src.size(0)], feat_grl[pred_src.size(0) : ]
-            loss_cond, _ = self.adv_class(feat_src, feat_tar, pred_src, pred_tar)
+        if compute_ada_loss:
+            if self.use_adv:
+                feat_grl = GradReverse.apply(features, 1)
+                # compute DANN loss
+                loss_mar = self.dann(feat_grl)
+                
+                # compute class-wise DANN loss
+                pred_src, pred_tar = preds[:label_src.size(0)], preds[label_src.size(0):]
+                feat_src, feat_tar = feat_grl[: pred_src.size(0)], feat_grl[pred_src.size(0) : ]
+                loss_cond, _ = self.adv_class(feat_src, feat_tar, pred_src, pred_tar)
 
-            # compute inputs for mdd
-            outputs_adv = self.classifier_layer_2(feat_grl)
-        else:
-            fea_src, fea_tar = features[:label_src.size(0)], features[label_src.size(0):]
-            # compute mmd loss
-            loss_mar = mmd.marginal(fea_src, fea_tar)
+            else:
+                fea_src, fea_tar = features[:label_src.size(0)], features[label_src.size(0):]
+                # compute mmd loss
+                loss_mar = mmd.marginal(fea_src, fea_tar)
 
-            # compute conditional mmd loss
-            loss_cond = mmd.conditional(fea_src, fea_tar, label_src, out_prob[label_src.size(0):], classnum=self.n_class)
+                # compute conditional mmd loss
+                loss_cond = mmd.conditional(fea_src, fea_tar, label_src, out_prob[label_src.size(0):], classnum=self.n_class)
             
-        return features, out_logits, out_prob, outputs_adv, preds, loss_cls, loss_mar, loss_cond
+        return features, out_logits, preds, loss_cls, loss_mar, loss_cond
+
+    def predict(self, inputs):
+        """Prediction function
+
+        Args:
+            inputs (2d-array): raw input
+
+        Returns:
+            output_prob: probability
+            outputs: logits
+        """
+
+        features = self.featurizer(inputs)
+        features = self.bottleneck_layer(features)
+        output_logit = self.classifier_layer(features)
+        output_prob = F.softmax(output_logit)
+        probs, preds = torch.max(output_prob, 1)
+        return probs, output_logit, preds
+
+    def get_parameter_list(self):
+        if isinstance(self, torch.nn.DataParallel) or isinstance(self, torch.nn.parallel.DistributedDataParallel):
+            return self.module.parameter_list
+        return self.parameter_list
 
     def dann(self, feat_grl):
         """Compute DANN loss
@@ -114,13 +125,12 @@ class L2M(nn.Module):
         Returns:
             float: DANN loss
         """
-        class_criterion = nn.CrossEntropyLoss()
         domain_output = torch.sigmoid(self.domain_classifier(feat_grl))
         len_src, len_tar = feat_grl.size(0) // 2, feat_grl.size(0) // 2
         sdomain_label = torch.zeros(len_src).cuda().long()
         tdomain_label = torch.ones(len_tar).cuda().long()
         domain_label = torch.cat([sdomain_label, tdomain_label])
-        adv_loss = class_criterion(domain_output, domain_label)
+        adv_loss = F.cross_entropy(domain_output, domain_label)
         return adv_loss
 
     def adv_class(self, feat_s, feat_t, label_s, label_t):
@@ -135,7 +145,6 @@ class L2M(nn.Module):
         Returns:
             tuple: Loss and loss list for each class
         """
-        class_criterion = nn.CrossEntropyLoss()
         losses = []
         for label in torch.unique(label_s):
             feat_src, feat_tar = feat_s[label_s == label], feat_t[label_t == label]
@@ -146,93 +155,13 @@ class L2M(nn.Module):
             sdomain_label = torch.zeros(feat_src.size(0)).cuda().long()
             tdomain_label = torch.ones(feat_tar.size(0)).cuda().long()
             domain_label = torch.cat([sdomain_label, tdomain_label])
-            loss_adv_i = class_criterion(domain_out_i, domain_label)
+            loss_adv_i = F.cross_entropy(domain_out_i, domain_label)
             losses.append(loss_adv_i)
-        loss_avg = sum(losses) / len(torch.unique(label_s))
+        loss_avg = torch.tensor(losses, device='cuda').mean()
         return loss_avg, losses
 
-    def predict(self, inputs):
-        """Prediction function
-
-        Args:
-            inputs (2d-array): raw input
-
-        Returns:
-            output_prob: probability
-            outputs: logits
-        """
-        f = self.base_network(inputs)
-        features = self.bottleneck_layer(f)
-        output_logit = self.classifier_layer(features)
-        output_prob = self.softmax(output_logit)
-        probs, preds = torch.max(output_prob, 1)
-        return probs, output_logit, preds
-
-    def get_parameter_list(self):
-        if isinstance(self, torch.nn.DataParallel) or isinstance(self, torch.nn.parallel.DistributedDataParallel):
-            return self.module.parameter_list
-        return self.parameter_list
-
-    def match_feat(self, cond_loss, mar_loss, feat, logits):
-        """Generate matching features
-
-        Args:
-            cond_loss (float): conditional loss
-            mar_loss (float): marginal loss
-            feat (2d-array): feature matrix
-            logits (1d-aray): logits
-
-        Returns:
-            matching features
-        """
-        if self.match_feat_type == 0:  # feature
-            self.matched_feat = feat
-        elif self.match_feat_type == 1:  # logits
-            self.matched_feat = logits
-        elif self.match_feat_type == 2:  # conditional loss + marginal loss
-            self.matched_feat = torch.cat(
-                [cond_loss.reshape([1, 1]), mar_loss.reshape([1, 1])], dim=1)
-        elif self.match_feat_type == 3:  # feature + conditional loss + marginal loss
-            loss = torch.cat([cond_loss.reshape([1, 1]).expand(
-                feat.size(0), 1), mar_loss.reshape([1, 1]).expand(feat.size(0), 1)], dim=1)
-            self.matched_feat = torch.cat([feat, loss], dim=1)
-        elif self.match_feat_type == 4:  # logits + conditional loss + marginal loss
-            loss = torch.cat([cond_loss.reshape([1, 1]).expand(logits.size(
-                0), 1), mar_loss.reshape([1, 1]).expand(logits.size(0), 1)], dim=1)
-            self.matched_feat = torch.cat([logits, loss], dim=1)
-        elif self.match_feat_type == 5:  # feature + logits + conditional loss + marginal loss
-            loss = torch.cat([cond_loss.reshape([1, 1]).expand(logits.size(
-                0), 1), mar_loss.reshape([1, 1]).expand(logits.size(0), 1)], dim=1)
-            self.matched_feat = torch.cat([feat, logits, loss], dim=1)
-        elif self.match_feat_type == 6:  # feature + label
-            label = torch.cat(
-                [self.label_src.view(-1, 1).float(), self.label_tar.view(-1, 1).float()], dim=0)
-            self.matched_feat = torch.cat([feat, label], dim=1)
-        
-        return self.matched_feat
-
-def mdd_loss(outputs, len_src, cls_adv, srcweight):
-    """Implement the MDD loss. Reference:
-    Zhang et al. Bridging theory and algorithm for domain adpatation. ICML 2019.
-
-    Args:
-        outputs (1d-array): logits
-        len_src (int): length of source domain data
-        cls_adv (1d-array): adversarial logits of two domains
-        srcweight (float): source domain weight for mdd loss
-
-    Returns:
-        loss (float): mdd loss
-    """
-    class_criterion = torch.nn.CrossEntropyLoss()
-    y_pred = outputs.max(1)[1]
-    target_adv_src = y_pred[:len_src]
-    target_adv_tgt = y_pred[len_src:]
-    classifier_loss_adv_src = class_criterion(
-        cls_adv[:len_src], target_adv_src)
-    logloss_tgt = torch.log(torch.clamp(
-        1 - F.softmax(cls_adv[len_src:], dim=1), min=1e-15))
-    classifier_loss_adv_tgt = F.nll_loss(logloss_tgt, target_adv_tgt)
-    loss = srcweight * classifier_loss_adv_src + classifier_loss_adv_tgt
-    return loss
+if __name__ == '__main__':
+    l2m_model = L2M()
+    inputs = torch.randn(4,3,224,224)
+    print(l2m_model.predict(inputs))
 

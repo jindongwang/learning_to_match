@@ -11,7 +11,7 @@ import copy
 from utils.visualize import Visualize
 import data_loader
 import random
-
+from utils.helper import set_random
 
 class L2MTrainer(object):
     """Main training class"""
@@ -77,8 +77,8 @@ class L2MTrainer(object):
             # update gnet
             # construct meta_loader from target_loader before each epoch
             diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = 0, 0, 0, 0, 0
-            if epoch > 5:
-                self.load_meta_data(epoch)
+            if epoch > -1:
+                self.load_meta_data()
                 diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(
                     self.meta_source, self.meta_loader)
 
@@ -98,14 +98,14 @@ class L2MTrainer(object):
                 stop = 0
                 mxacc = acc
                 torch.save(self.model.state_dict(),
-                           self.save_path.replace('.log', '.mdl'))
+                           self.save_path.replace('.log', '.pkl'))
                 best_res = ret
             if not calcf1:
                 self.pprint(
-                    f"[Epoch:{epoch:02d}], cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, acc:{acc:.4f}, mxacc:{mxacc:.4f}")
+                    f"[Epoch:{epoch:02d}]: cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, acc:{acc:.4f}, mxacc:{mxacc:.4f}")
             else:
                 self.pprint(
-                    f"[Epoch:{epoch:02d}], cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, mxf1: {mxacc:.4f}")
+                    f"[Epoch:{epoch:02d}]: cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, mxf1: {mxacc:.4f}")
                 self.pprint(
                     f"P: {ret['p']:.4f}, R: {ret['r']:.4f}, f1: {ret['f1']:.4f}, acc: {ret['accuracy']:.4f}, auc: {ret['auc']:.4f}")
             epoch += 1
@@ -147,9 +147,9 @@ class L2MTrainer(object):
             inputs_source, inputs_target, labels_source = inputs_source.cuda(
             ), inputs_target.cuda(), labels_source.cuda(),
             inputs = torch.cat((inputs_source, inputs_target), dim=0)
-            feat, logits, _, _, _, classifier_loss, mar_loss, cond_loss = self.model(
+            feat, logits, _, classifier_loss, mar_loss, cond_loss = self.model(
                 inputs, labels_source)
-            m_feat = self.model.match_feat(cond_loss, mar_loss, feat, logits)
+            m_feat = feat
             gloss = self.gnet(m_feat).mean()
             # gloss = torch.tensor(0)
             total_loss = classifier_loss + self.config.lamb * mar_loss + self.config.mu * gloss
@@ -188,18 +188,16 @@ class L2MTrainer(object):
                     continue
                 inputs_tmp = torch.cat((inputs_source, meta_data), dim=0)
 
-                feat, logits, _, _, _, classifier_loss, mar_loss, cond_loss = self.model_old(
+                feat, logits, _, classifier_loss, mar_loss, cond_loss = self.model_old(
                     inputs_tmp, labels_source)
-                m_feat = self.model_old.match_feat(
-                    cond_loss, mar_loss, feat, logits)
-                labels = torch.cat((labels_source, meta_label), dim=0)
-                # g_loss_pre = self.gnet.forward2(m_feat, labels).mean()
+                m_feat = feat
+                # labels = torch.cat((labels_source, meta_label), dim=0)
+                # # g_loss_pre = self.gnet.forward2(m_feat, labels).mean()
                 g_loss_pre = self.gnet(m_feat)
 
-                feat2, logits2, _, _, _, classifier_loss2, mar_loss2, cond_loss2 = self.model(
+                feat2, logits2, _, classifier_loss2, mar_loss2, cond_loss2 = self.model(
                     inputs_tmp, labels_source)
-                m_feat2 = self.model.match_feat(
-                    cond_loss2, mar_loss2, feat2, logits2)
+                m_feat2 = feat2
                 # g_loss_post = self.gnet.forward2(m_feat2, labels).mean()
                 g_loss_post = self.gnet(m_feat2)
 
@@ -216,21 +214,16 @@ class L2MTrainer(object):
                 lst_mar_loss2.append(mar_loss2.item())
         return np.array(lst_diff).mean(), np.array(lst_g_loss_pre).mean(), np.array(lst_g_loss_post).mean(), np.array(lst_mar_loss).mean(), np.array(lst_mar_loss2).mean()
 
-    def load_meta_data(self, epoch):
+    def load_meta_data(self):
         kwargs = {'num_workers': 4, 'pin_memory': True}
         train_val_split = -1
-        seed = epoch * 2
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        random.seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        set_random(self.config.seed * 2)
         self.meta_source_loader = data_loader.load_testing(
-            self.config.root_path, self.config.source_dir, self.config.batch_size, kwargs)
+            self.config.data_path, self.config.src, self.config.batch_size, kwargs)
         self.train_source_loader = data_loader.load_training(
-            self.config.root_path, self.config.source_dir, self.config.batch_size, kwargs, train_val_split)
+            self.config.data_path, self.config.src, self.config.batch_size, kwargs, train_val_split)
         self.train_target_loader = data_loader.load_training(
-            self.config.root_path, self.config.test_dir, self.config.batch_size, kwargs, train_val_split)
+            self.config.data_path, self.config.tar, self.config.batch_size, kwargs, train_val_split)
 
         self.meta_loader = self.generate_metadata_soft(
             self.meta_m, self.test_target_loader, self.model, self.config.gbatch, select_mode='top')
@@ -337,7 +330,7 @@ class L2MTrainer(object):
 
     def pprint(self, *text):
         # print with UTC+8 time
-        log_file = self.config.save_path.replace(".mdl", ".log")
+        log_file = self.config.save_path.replace(".pkl", ".log")
         curr_time = ("[" + str(datetime.datetime.utcnow() +
                                datetime.timedelta(hours=8))[:19] + "] -")
         print(curr_time, *text, flush=True)
@@ -432,8 +425,3 @@ def generate_metadata(m, loader):
 def set_require_grad(model, grad=True):
     for item in model.parameters():
         item.requires_grad = grad
-
-
-if __name__ == "__main__":
-    a = L2MTrainer(None, None, None, None, None, None, None, None)
-    print(a)

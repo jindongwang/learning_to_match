@@ -8,7 +8,7 @@ import numpy as np
 import data_loader
 from model import GNet, L2M, L2MTrainer, GNetGram, GNetTransformer
 import datetime
-import random
+from utils import helper
 import os
 import warnings
 warnings.filterwarnings("ignore")
@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore")
 
 def pprint(*text):
     # print with UTC+8 time
-    log_file = args.save_path.replace('.mdl', '.log')
+    log_file = args.save_path.replace('.pkl', '.log')
     curr_time = '['+str(datetime.datetime.utcnow() +
                         datetime.timedelta(hours=8))[:19]+'] -'
     print(curr_time, *text, flush=True)
@@ -65,7 +65,7 @@ def get_data_config(dataset_name):
         is_cen = False
         args.source_dir = 'train'
         args.test_dir = 'validation'
-        args.save_path = 'visda.mdl'
+        args.save_path = 'visda.pkl'
     elif dataset_name.lower() in ['covid-19', 'covid', 'covid19']:
         class_num = 2
         width = 512
@@ -73,7 +73,7 @@ def get_data_config(dataset_name):
         is_cen = False
         args.source_dir = 'pneumonia'
         args.test_dir = 'covid'
-        args.save_path = 'covid.mdl'
+        args.save_path = 'covid.pkl'
     elif dataset_name.lower() in ['visda-binary', 'vbinary']:
         class_num = 2
         width = 2048
@@ -81,7 +81,7 @@ def get_data_config(dataset_name):
         is_cen = False
         args.source_dir = 'train'
         args.test_dir = 'validation'
-        args.save_path = 'visda-binary.mdl'
+        args.save_path = 'visda-binary.pkl'
     elif dataset_name.lower() in ['bac']:
         class_num = 2
         width = 512
@@ -89,7 +89,7 @@ def get_data_config(dataset_name):
         is_cen = False
         args.source_dir = 'pneumonia'
         args.test_dir = 'covid'
-        args.save_path = 'bac.mdl'
+        args.save_path = 'bac.pkl'
     elif dataset_name.lower() in ['viral']:
         class_num = 2
         width = 512
@@ -97,70 +97,36 @@ def get_data_config(dataset_name):
         is_cen = False
         args.source_dir = 'pneumonia'
         args.test_dir = 'covid'
-        args.save_path = 'viral.mdl'
+        args.save_path = 'viral.pkl'
     return class_num, width, srcweight, is_cen
 
 
 def init_gnet(width, class_num):
-    input_gnet = 0
-    if args.match_feat_type == 0:
-        input_gnet = width
-    elif args.match_feat_type == 1:
-        input_gnet = class_num
-    elif args.match_feat_type == 2:
-        input_gnet = 2
-    elif args.match_feat_type == 3:
-        input_gnet = width + 2 if args.cat_feature == 'column' else width
-    elif args.match_feat_type == 4:
-        input_gnet = class_num + 2 if args.cat_feature == 'column' else class_num
-    elif args.match_feat_type == 5:
-        input_gnet = class_num + width + 2 if args.cat_feature == 'column' else class_num
-    elif args.match_feat_type == 6:
-        input_gnet = width + 1
-    assert (input_gnet != 0), 'GNet error!'
     # gnet = GNetGram(2 * args.meta_m ** 2, [256, 128], 1,
     #                 use_set=True, drop_out=.5, mono=False, init_net=True)
-    gnet = GNetGram(args.gbatch ** 2, [128, 64], 1,
-                    use_set=True, drop_out=.5, mono=False, init_net=True)
+    # gnet = GNetGram(args.gbatch ** 2, [128, 64], 1,
+    #                 use_set=True, drop_out=.5, mono=False, init_net=True)
     # gnet = GNet(input_gnet, [512, 256], 1, use_set=True,
     #             drop_out=.5, mono=False, init_net=True)
-    # gnet = GNetTransformer(32 * 32, [128, 64], 1,
-    #                 use_set=True, drop_out=.5, mono=False, init_net=True)
+    gnet = GNetTransformer(32 * 32, [128, 64], 1,
+                    use_set=True, drop_out=.5, mono=False, init_net=True)
     return gnet
 
 
 def get_args():
-    def str2bool(v):
-        if v.lower() in ('yes', 'true', 't', 'y', '1'):
-            return True
-        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-            return False
-        else:
-            raise argparse.ArgumentTypeError('Unsupported value encountered.')
     parser = argparse.ArgumentParser()
+
+    # training setting
     parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--dataset', default='covid', type=str,
+    parser.add_argument('--dataset', default='ohome', type=str,
                         help='which dataset')
     parser.add_argument('--seed', type=int, default=52, metavar='S',
                         help='random seed (default: 3)')
-    parser.add_argument('--root_path', type=str, default="/home/jindwang/mine/data/covid_folder",
-                        help='the path to load the data')
-    parser.add_argument('--source_dir', type=str, default="pneumonia",
+    parser.add_argument('--src', type=str, default="pneumonia",
                         help='the name of the source dir')
-    parser.add_argument('--test_dir', type=str, default="covid",
+    parser.add_argument('--tar', type=str, default="covid",
                         help='the name of the test dir')
-    parser.add_argument('--save_path', type=str, default="covid.mdl",
-                        help='the path to save the trained model')
-    parser.add_argument('--save_folder', type=str, default='outputs')
-    parser.add_argument('--use_adv', type=str2bool,
-                        nargs='?', const=True, default=True)
-    parser.add_argument('--match_feat_type', type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
-                        help="""0: feature;
-                                1: logits;
-                                2: conditional loss + marginal loss;
-                                3: feature + conditional loss + marginal loss;
-                                4: logits + conditional loss + marginal loss
-                                5: logits + feature + cond + marg loss (ALL)""")
+    parser.add_argument('--use_adv', action='store_true', default=True)
     parser.add_argument('--init_lr', type=float, default=0.004)
     parser.add_argument('--glr', type=float, default=0.0005,
                         help='learning rate for gnet')
@@ -168,20 +134,24 @@ def get_args():
     parser.add_argument('--decay_rate', type=float, default=0.75)
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--weight_decay', type=float, default=0.0005)
-    parser.add_argument('--nesterov', type=str2bool,
-                        nargs='?', const=True, default=True)
-    parser.add_argument('--cat_feature', type=str, default='column')
-    parser.add_argument('--multi_gpu', type=str2bool,
-                        nargs='?', const=True, default=False)
+    parser.add_argument('--nesterov', action='store_false', default=True)
+    parser.add_argument('--multi_gpu', action='store_true', default=False)
     parser.add_argument('--early_stop', type=int, default=20)
-    parser.add_argument('--exp', type=str, default='l2m')
     parser.add_argument('--gopt', type=str, default='sgd')
     parser.add_argument('--meta_m', type=int, default=8)
-    parser.add_argument('--gbatch', type=int, default=16)
+    parser.add_argument('--gbatch', type=int, default=32)
     parser.add_argument('--lamb', type=float, default=10)
     parser.add_argument('--mu', type=float, default=0.01)
-    parser.add_argument('--test', type=str2bool, nargs='?', const=True, default=False)
-    parser.add_argument('--test_model_file', type=str, default='model.mdl')
+    parser.add_argument('--test', action='store_true', default=False)
+    parser.add_argument('--test_model_file', type=str, default='model.pkl')
+
+    # save, path, folder
+    parser.add_argument('--data_path', type=str, default="/data/jindwang/OfficeHome/",
+                        help='the path to load the data')
+    parser.add_argument('--save_path', type=str, default="model.pkl",
+                        help='the path to save the trained model')
+    parser.add_argument('--save_folder', type=str, default='outputs', help='results save folder')
+    parser.add_argument('--exp', type=str, default='l2m', help='Experiment name')
     args = parser.parse_args()
     return args
 
@@ -189,22 +159,12 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
     class_num, width, srcweight, is_cen = get_data_config(args.dataset)
-    args.save_path = f"{args.dataset}-lamb-{args.lamb}-mu-{args.mu}.mdl"
+    args.save_path = f"{args.dataset}-lamb-{args.lamb}-mu-{args.mu}.pkl"
     assert (class_num != -1), 'Dataset name error!'
-    assert (args.match_feat_type <=
-            6), 'option match_feat_type error!'
 
-    # controls random seed
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
+    helper.set_random(args.seed)
     args.save_path = os.path.join(args.save_folder, args.save_path)
-    args.log_file = args.save_path.replace('.mdl', '.log')
+    args.log_file = args.save_path.replace('.pkl', '.log')
 
     pprint(vars(args))
 
@@ -213,9 +173,9 @@ if __name__ == '__main__':
     ) in ['covid-19', 'covid', 'covid19', 'bac', 'viral'] else 'ResNet50'
 
     model_old = L2M(base_net=basenet, bottleneck_dim=1024, width=256,
-                    class_num=class_num, use_adv=args.use_adv, match_feat_type=args.match_feat_type)
+                    class_num=class_num, use_adv=args.use_adv)
     model = L2M(base_net=basenet, bottleneck_dim=1024, width=256, class_num=class_num,
-                use_adv=args.use_adv, match_feat_type=args.match_feat_type)
+                use_adv=args.use_adv)
 
     gnet = gnet.cuda()
     model = model.cuda()
@@ -225,13 +185,11 @@ if __name__ == '__main__':
     if args.multi_gpu:
         device_ids = [0, 1]
         gnet = torch.nn.DataParallel(gnet, device_ids)
-        model.net = torch.nn.DataParallel(
-            model, device_ids)
-        model_old.net = torch.nn.DataParallel(
-            model_old, device_ids)
+        model.net = torch.nn.DataParallel(model, device_ids)
+        model_old.net = torch.nn.DataParallel(model_old, device_ids)
 
     train_source_loader, train_target_loader, test_target_loader = load_data(
-        args.root_path, args.source_dir, args.test_dir, args.batch_size)
+        args.data_path, args.src, args.tar, args.batch_size)
     dataloaders = train_source_loader, train_target_loader, test_target_loader
 
     trainer = L2MTrainer(gnet, model, model_old, dataloaders, args)

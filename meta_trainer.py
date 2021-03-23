@@ -78,6 +78,7 @@ class ERM(nn.Module):
         )
 
 
+    
     def fp(self, x):
         f = self.base_network(x)
         out_logits = self.classifier_layer(f)
@@ -248,6 +249,38 @@ class MLDG(ERM):
         self.optimizer.step()
 
         return {'loss': objective}
+
+
+class MEDA(ERM):
+    """
+    Deep version of MEDA
+    """
+    def __init__(self, base_net='ResNet50', bottleneck_dim=2048, width=2048, class_num=65, hparams=None):
+        super(Mixup, self).__init__()
+        self.hparams = hparams
+
+    def update(self, minibatches, unlabeled=None):
+        objective = 0
+        ypred = torch.max(self.network(minibatches[1][0]), 1)[1]
+        minibatches = [minibatches[0], (minibatches[0][0], ypred)]
+        
+        for (xi, yi), (xj, yj) in minibatches:
+            lam = np.random.beta(self.hparams["mixup_alpha"],
+                                 self.hparams["mixup_alpha"])
+
+            x = lam * xi + (1 - lam) * xj
+            predictions = self.fp(x)
+
+            objective += lam * F.cross_entropy(predictions, yi)
+            objective += (1 - lam) * F.cross_entropy(predictions, yj)
+
+        objective /= len(minibatches)
+
+        self.optimizer.zero_grad()
+        objective.backward()
+        self.optimizer.step()
+
+        return {'loss': objective.item()}
 
 def train(dataloaders, model):
     train_loader, val_loader, test_loader = dataloaders
