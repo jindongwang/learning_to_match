@@ -1,12 +1,11 @@
 import pretty_errors
 import os
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
 import argparse
 import torch
 import torch.nn as nn
 import numpy as np
 import data_loader
-from model import GNet, L2M, L2MTrainer, GNetGram, GNetTransformer
+from model import GNet, L2MNet, L2MTrainer, GNetGram, GNetTransformer
 import datetime
 from utils import helper
 import os
@@ -46,70 +45,44 @@ def get_data_config(dataset_name):
     if dataset_name.lower() in ['office-31', 'office31', 'o31']:
         class_num = 31
         width = 2048
-        srcweight = 3
-        is_cen = False
     elif dataset_name.lower() in ['office-home', 'officehome', 'ohome']:
         class_num = 65
         width = 2048
-        srcweight = 3
-        is_cen = False
     elif dataset_name.lower() in ['imageclef-da', 'clef', 'imageclef', 'imageclefda']:
         class_num = 12
         width = 2048
-        srcweight = 2
-        is_cen = False
     elif dataset_name.lower() in ['visda', 'visda17', 'visda-17']:
         class_num = 12
         width = 2048
-        srcweight = 3
-        is_cen = False
-        args.source_dir = 'train'
-        args.test_dir = 'validation'
         args.save_path = 'visda.pkl'
     elif dataset_name.lower() in ['covid-19', 'covid', 'covid19']:
         class_num = 2
         width = 512
-        srcweight = 3
-        is_cen = False
-        args.source_dir = 'pneumonia'
-        args.test_dir = 'covid'
         args.save_path = 'covid.pkl'
     elif dataset_name.lower() in ['visda-binary', 'vbinary']:
         class_num = 2
         width = 2048
-        srcweight = 3
-        is_cen = False
-        args.source_dir = 'train'
-        args.test_dir = 'validation'
         args.save_path = 'visda-binary.pkl'
     elif dataset_name.lower() in ['bac']:
         class_num = 2
         width = 512
-        srcweight = 3
-        is_cen = False
-        args.source_dir = 'pneumonia'
-        args.test_dir = 'covid'
         args.save_path = 'bac.pkl'
     elif dataset_name.lower() in ['viral']:
         class_num = 2
         width = 512
-        srcweight = 3
-        is_cen = False
-        args.source_dir = 'pneumonia'
-        args.test_dir = 'covid'
         args.save_path = 'viral.pkl'
     return class_num, width, srcweight, is_cen
 
 
-def init_gnet(width, class_num):
+def init_gnet(g_input):
     # gnet = GNetGram(2 * args.meta_m ** 2, [256, 128], 1,
     #                 use_set=True, drop_out=.5, mono=False, init_net=True)
-    # gnet = GNetGram(args.gbatch ** 2, [128, 64], 1,
-    #                 use_set=True, drop_out=.5, mono=False, init_net=True)
+    gnet = GNetGram(g_input, [128, 64], 1,
+                    use_set=True, drop_out=.5, mono=False, init_net=True)
     # gnet = GNet(input_gnet, [512, 256], 1, use_set=True,
     #             drop_out=.5, mono=False, init_net=True)
-    gnet = GNetTransformer(32 * 32, [128, 64], 1,
-                    use_set=True, drop_out=.5, mono=False, init_net=True)
+    # gnet = GNetTransformer(32 * 32, [128, 64], 1,
+    #                 use_set=True, drop_out=.5, mono=False, init_net=True)
     return gnet
 
 
@@ -138,27 +111,30 @@ def get_args():
     parser.add_argument('--nesterov', action='store_false', default=True)
     parser.add_argument('--multi_gpu', action='store_true', default=False)
     parser.add_argument('--early_stop', type=int, default=20)
+
     parser.add_argument('--gopt', type=str, default='sgd')
     parser.add_argument('--meta_m', type=int, default=8)
-    parser.add_argument('--gbatch', type=int, default=32)
+    parser.add_argument('--gbatch', type=int, default=16)
     parser.add_argument('--lamb', type=float, default=10)
     parser.add_argument('--mu', type=float, default=0.01)
     parser.add_argument('--test', action='store_true', default=False)
     parser.add_argument('--test_model_file', type=str, default='model.pkl')
 
     # save, path, folder
-    parser.add_argument('--data_path', type=str, default="/home/jindwang/OfficeHome/",
+    parser.add_argument('--data_path', type=str, default="/home/jindwang/mine/data/covid_folder/",
                         help='the path to load the data')
     parser.add_argument('--save_path', type=str, default="model.pkl",
                         help='the path to save the trained model')
     parser.add_argument('--save_folder', type=str, default='outputs', help='results save folder')
     parser.add_argument('--exp', type=str, default='l2m', help='Experiment name')
+    parser.add_argument('--gpu', type=int, default=0)
     args = parser.parse_args()
     return args
 
 
 if __name__ == '__main__':
     args = get_args()
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
     class_num, width, srcweight, is_cen = get_data_config(args.dataset)
     args.save_path = f"{args.dataset}-lamb-{args.lamb}-mu-{args.mu}.pkl"
     assert (class_num != -1), 'Dataset name error!'
@@ -169,13 +145,13 @@ if __name__ == '__main__':
 
     pprint(vars(args))
 
-    gnet = init_gnet(1024, class_num)
+    gnet = init_gnet(args.gbatch ** 2)
     basenet = 'ResNet18' if args.dataset.lower(
     ) in ['covid-19', 'covid', 'covid19', 'bac', 'viral'] else 'ResNet50'
 
-    model_old = L2M(base_net=basenet, bottleneck_dim=1024, width=256,
+    model_old = L2MNet(base_net=basenet, bottleneck_dim=1024, width=256,
                     class_num=class_num, use_adv=args.use_adv)
-    model = L2M(base_net=basenet, bottleneck_dim=1024, width=256, class_num=class_num,
+    model = L2MNet(base_net=basenet, bottleneck_dim=1024, width=256, class_num=class_num,
                 use_adv=args.use_adv)
 
     gnet = gnet.cuda()

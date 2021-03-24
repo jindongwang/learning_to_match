@@ -3,7 +3,6 @@
 import visdom
 import numpy as np
 import time
-from graphviz import Digraph
 import torch
 
 class Visualize(object):
@@ -82,7 +81,7 @@ class Visualize(object):
                         fontsize='12',
                         ranksep='0.1',
                         height='0.2')
-
+        from graphviz import Digraph
         dot = Digraph(
             filename='network', 
             format='pdf',

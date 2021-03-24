@@ -7,10 +7,8 @@ from model.grl import GradReverse
 from model.mlp import MLP
 import model.backbone as backbone
 
-'''
-L2M network.
-'''
-class L2M(nn.Module):
+
+class L2MNet(nn.Module):
     def __init__(self, base_net='ResNet50', bottleneck_dim=2048, width=256, class_num=31, use_adv=True):
         """Init func
 
@@ -21,7 +19,7 @@ class L2M(nn.Module):
             class_num (int, optional): number of classes. Defaults to 31.
             use_adv (bool, optional): use adversarial training or not. Defaults to True.
         """
-        super(L2M, self).__init__()
+        super(L2MNet, self).__init__()
         self.use_adv = use_adv
         self.n_class = class_num
         self.featurizer = backbone.network_dict[base_net]()
@@ -41,11 +39,9 @@ class L2M(nn.Module):
                                {"params": self.classifier_layer.parameters(), "lr": 1}]
 
         if self.use_adv:
-            # DANN: add DANN, make L2M not only class-invariant (as conditional loss) but also domain invariant (as marginal loss)
             self.domain_classifier = MLP(
                 bottleneck_dim, [bottleneck_dim, width], 2, drop_out=.5)
             
-            # Class-conditional DANN
             self.domain_classifier_class = nn.ModuleList([MLP(
                 bottleneck_dim, [bottleneck_dim, width], 2, drop_out=.5) for _ in range(class_num)])
 

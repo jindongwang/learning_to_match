@@ -1,5 +1,3 @@
-import itertools
-from numpy.core.fromnumeric import argsort
 import torch
 import numpy as np
 import copy
@@ -7,11 +5,10 @@ import datetime
 import os
 import math
 
-from utils.utils_f1 import metric
+from utils.helper import metric, AverageMeter
 import copy
 from utils.visualize import Visualize
 import data_loader
-import random
 from utils.helper import set_random
 
 class L2MTrainer(object):
@@ -26,7 +23,6 @@ class L2MTrainer(object):
             model_old (old model): old model
             dataloaders (list): [source_train_loader, target_train_loader, target_test_loader]
             config (dict): config dict
-            max_iter (int, optional): maximum iteration num. Defaults to 200000.
         """
         self.gnet = gnet
         self.model = model
@@ -68,11 +64,7 @@ class L2MTrainer(object):
             self.model_old.train()
             self.model.train()
 
-            lr = self.config.init_lr / math.pow((1 + 10 * epoch / self.max_iter), .75)
-            print(f'lr: {lr}')
-            # for item in self.param_groups:
-            #     item['lr'] *= lr
-            # print(self.param_groups)
+            lr = self.config.init_lr / math.pow((1 + 10 * epoch / self.max_iter), self.config.gamma)
             self.optimizer_m = torch.optim.SGD([
                 {'params': self.model.featurizer.parameters()},
                 {'params': self.model.bottleneck_layer.parameters(), 'lr': lr},
@@ -83,8 +75,7 @@ class L2MTrainer(object):
             # update main model
             cls_loss = 0
             lambd = 2 / (1 + math.exp(-10 * (epoch) / self.max_iter)) - 1
-            cls_loss, gloss = self.update_main_model(
-                self.train_source_loader, self.train_target_loader, lambd)
+            cls_loss, gloss = self.update_main_model(self.train_source_loader, self.train_target_loader, lambd)
 
             # update gnet
             # construct meta_loader from target_loader before each epoch
@@ -94,32 +85,22 @@ class L2MTrainer(object):
                 diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(
                     self.meta_source, self.meta_loader)
 
-            # self.vis.plot_line([mar_loss, mar_loss2], epoch,
-            #                    title="MMD", legend=["old", "new"])
-            # self.vis.plot_line([g_loss_pre, g_loss_post],
-            #                    epoch, title="GNet", legend=["old", "new"])
-
             stop += 1
             calcf1 = True if self.config.dataset.lower(
             ) in ['covid-19', 'covid', 'covid19', 'visda-binary', 'vbinary', 'bac', 'viral'] else False
-            ret = self.evaluate(
-                self.model, self.test_target_loader, calcf1=calcf1)
+            ret = self.evaluate(self.model, self.test_target_loader, calcf1=calcf1)
             acc = ret["f1"] if calcf1 else ret["accuracy"]
 
             if acc >= mxacc:
                 stop = 0
                 mxacc = acc
-                torch.save(self.model.state_dict(),
-                           self.save_path.replace('.log', '.pkl'))
+                torch.save(self.model.state_dict(), self.save_path.replace('.log', '.pkl'))
                 best_res = ret
             if not calcf1:
-                self.pprint(
-                    f"[Epoch:{epoch:02d}]: cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, acc:{acc:.4f}, mxacc:{mxacc:.4f}")
+                self.pprint(f"[Epoch:{epoch:02d}]: cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, acc:{acc:.4f}, mxacc:{mxacc:.4f}")
             else:
-                self.pprint(
-                    f"[Epoch:{epoch:02d}]: cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, mxf1: {mxacc:.4f}")
-                self.pprint(
-                    f"P: {ret['p']:.4f}, R: {ret['r']:.4f}, f1: {ret['f1']:.4f}, acc: {ret['accuracy']:.4f}, auc: {ret['auc']:.4f}")
+                self.pprint(f"[Epoch:{epoch:02d}]: cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, mxf1: {mxacc:.4f}")
+                self.pprint(f"P: {ret['p']:.4f}, R: {ret['r']:.4f}, f1: {ret['f1']:.4f}, acc: {ret['accuracy']:.4f}, auc: {ret['auc']:.4f}")
 
             if stop >= self.config.early_stop:
                 self.pprint("=================Early stop!!")
@@ -130,7 +111,6 @@ class L2MTrainer(object):
                 f"P: {best_res['p']:.4f}, R: {best_res['r']:.4f}, f1: {best_res['f1']:.4f}, acc: {best_res['accuracy']:.4f}, auc: {best_res['auc']:.4f}")
         else:
             self.pprint(f"acc: {best_res['accuracy']:.4f}")
-        self.pprint("Train is finished!")
 
     def update_main_model(self, src_train_loader, tar_train_loader, lambd):
         """Update the main model (feature learning)
@@ -142,35 +122,27 @@ class L2MTrainer(object):
         Returns:
             tuple: classification loss and gloss (on average)
         """
-        classifier_loss, gloss = -1, -1
-        lst_cls, lst_gloss = [], []
+        classifier_loss, gloss = 0, 0
+        lst_cls, lst_gloss = AverageMeter('loss_cls'), AverageMeter('gloss')
         for (datas, datat) in zip(src_train_loader, tar_train_loader):
             inputs_source, labels_source = datas
             inputs_target, _ = datat
             if inputs_source.size(0) != inputs_target.size(0):
                 continue
 
-            # self.optimizer_m, _ = self.lr_scheduler.next_optimizer(
-            #     self.group_ratios, self.optimizer_m, self.iter_num / 5)
             inputs_source, inputs_target, labels_source = inputs_source.cuda(
             ), inputs_target.cuda(), labels_source.cuda(),
             inputs = torch.cat((inputs_source, inputs_target), dim=0)
-            feat, logits, _, classifier_loss, mar_loss, cond_loss = self.model(
-                inputs, labels_source)
-            m_feat = feat
-            gloss = self.gnet(m_feat).mean()
-            # total_loss = classifier_loss + lambd * 0.3 * gloss
-            total_loss = classifier_loss + lambd * 0.3 * cond_loss
+            feat, _, _, classifier_loss, _, _ = self.model(inputs, labels_source)
+            gloss = self.gnet(feat).mean()
+            total_loss = classifier_loss + lambd * self.config.mu * gloss
 
             self.optimizer_m.zero_grad()
             total_loss.backward()
             self.optimizer_m.step()
-            lst_cls.append(classifier_loss.item())
-            lst_gloss.append(gloss.item())
-            self.iter_num += 1
-        avg_loss = np.array(lst_cls).mean()
-        avg_gloss = np.array(lst_gloss).mean()
-        return avg_loss, avg_gloss
+            lst_cls.update(classifier_loss.item())
+            lst_gloss.update(gloss.item())
+        return lst_cls.avg, lst_gloss.avg
 
     def update_gnet(self, source_loader, meta_loader, nepoch=1):
         """Update gnet
@@ -183,7 +155,7 @@ class L2MTrainer(object):
         Returns:
             tuple: several losses
         """
-        lst_diff, lst_g_loss_pre, lst_g_loss_post, lst_mar_loss, lst_mar_loss2 = [], [], [], [], []
+        lst_diff, lst_g_loss_pre, lst_g_loss_post, lst_mar_loss, lst_mar_loss2 = AverageMeter('diff'), AverageMeter('g_loss_pre'), AverageMeter('g_loss_post'), AverageMeter('mar_loss'), AverageMeter('mar_loss_2')
         for _ in range(nepoch):
             for (datas, datat) in zip(source_loader, meta_loader):
                 inputs_source, labels_source = datas
@@ -194,31 +166,23 @@ class L2MTrainer(object):
                     continue
                 inputs_tmp = torch.cat((inputs_source, meta_data), dim=0)
 
-                feat, logits, _, classifier_loss, mar_loss, cond_loss = self.model_old(
-                    inputs_tmp, labels_source)
-                m_feat = feat
-                # labels = torch.cat((labels_source, meta_label), dim=0)
-                # # g_loss_pre = self.gnet.forward2(m_feat, labels).mean()
-                g_loss_pre = self.gnet(m_feat)
+                feat, _, _, _, mar_loss, _ = self.model_old(inputs_tmp, labels_source)
+                g_loss_pre = self.gnet(feat)
 
-                feat2, logits2, _, classifier_loss2, mar_loss2, cond_loss2 = self.model(
-                    inputs_tmp, labels_source)
-                m_feat2 = feat2
-                # g_loss_post = self.gnet.forward2(m_feat2, labels).mean()
-                g_loss_post = self.gnet(m_feat2)
+                feat2, _, _, _, mar_loss2, _ = self.model(inputs_tmp, labels_source)
+                g_loss_post = self.gnet(feat2)
 
                 diff = gnet_diff(g_loss_pre, g_loss_post)
                 self.optimizer_g.zero_grad()
                 diff.backward()
                 self.optimizer_g.step()
-                # update_params(self.gnet, get_grad(self.gnet), self.config.glr)
 
-                lst_diff.append(diff.item())
-                lst_g_loss_pre.append(g_loss_pre.item())
-                lst_g_loss_post.append(g_loss_post.item())
-                lst_mar_loss.append(mar_loss.item())
-                lst_mar_loss2.append(mar_loss2.item())
-        return np.array(lst_diff).mean(), np.array(lst_g_loss_pre).mean(), np.array(lst_g_loss_post).mean(), np.array(lst_mar_loss).mean(), np.array(lst_mar_loss2).mean()
+                lst_diff.update(diff.item())
+                lst_g_loss_pre.update(g_loss_pre.item())
+                lst_g_loss_post.update(g_loss_post.item())
+                lst_mar_loss.update(mar_loss.item())
+                lst_mar_loss2.update(mar_loss2.item())
+        return lst_diff.avg, lst_g_loss_pre.avg, lst_g_loss_post.avg, lst_mar_loss.avg, lst_mar_loss2.avg
 
     def load_meta_data(self):
         kwargs = {'num_workers': 4, 'pin_memory': True}
