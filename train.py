@@ -118,6 +118,7 @@ def get_args():
 
     # training setting
     parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--nepoch', type=int, default=100)
     parser.add_argument('--dataset', default='ohome', type=str,
                         help='which dataset')
     parser.add_argument('--seed', type=int, default=52, metavar='S',
@@ -126,11 +127,11 @@ def get_args():
                         help='the name of the source dir')
     parser.add_argument('--tar', type=str, default="covid",
                         help='the name of the test dir')
-    parser.add_argument('--use_adv', action='store_true', default=True)
+    parser.add_argument('--use_adv', action='store_true', default=False)
     parser.add_argument('--init_lr', type=float, default=0.004)
     parser.add_argument('--glr', type=float, default=0.0005,
                         help='learning rate for gnet')
-    parser.add_argument('--gamma', type=float, default=0.001)
+    parser.add_argument('--gamma', type=float, default=10)
     parser.add_argument('--decay_rate', type=float, default=0.75)
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--weight_decay', type=float, default=0.0005)
@@ -146,7 +147,7 @@ def get_args():
     parser.add_argument('--test_model_file', type=str, default='model.pkl')
 
     # save, path, folder
-    parser.add_argument('--data_path', type=str, default="/data/jindwang/OfficeHome/",
+    parser.add_argument('--data_path', type=str, default="/home/jindwang/OfficeHome/",
                         help='the path to load the data')
     parser.add_argument('--save_path', type=str, default="model.pkl",
                         help='the path to save the trained model')
@@ -162,7 +163,7 @@ if __name__ == '__main__':
     args.save_path = f"{args.dataset}-lamb-{args.lamb}-mu-{args.mu}.pkl"
     assert (class_num != -1), 'Dataset name error!'
 
-    helper.set_random(args.seed)
+    # helper.set_random(args.seed)
     args.save_path = os.path.join(args.save_folder, args.save_path)
     args.log_file = args.save_path.replace('.pkl', '.log')
 

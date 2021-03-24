@@ -5,6 +5,7 @@ import numpy as np
 import copy
 import datetime
 import os
+import math
 
 from utils.utils_f1 import metric
 import copy
@@ -16,7 +17,7 @@ from utils.helper import set_random
 class L2MTrainer(object):
     """Main training class"""
 
-    def __init__(self, gnet, model, model_old, dataloaders, config, max_iter=200000) -> None:
+    def __init__(self, gnet, model, model_old, dataloaders, config) -> None:
         """Init func
 
         Args:
@@ -35,7 +36,7 @@ class L2MTrainer(object):
         self.param_groups = self.model.get_parameter_list()
         self.group_ratios = [group["lr"] for group in self.param_groups]
         self.optimizer_m = torch.optim.SGD(self.param_groups, lr=self.config.init_lr, momentum=self.config.momentum,
-                                           weight_decay=self.config.weight_decay, nesterov=self.config.nesterov)
+                                           weight_decay=self.config.weight_decay)
         if self.config.gopt == 'adam':
             self.optimizer_g = torch.optim.Adam(
                 self.gnet.parameters(), lr=self.config.glr)
@@ -43,49 +44,60 @@ class L2MTrainer(object):
             self.optimizer_g = torch.optim.SGD(self.gnet.parameters(
             ), lr=self.config.glr, momentum=self.config.momentum, weight_decay=self.config.weight_decay)
 
-        self.max_iter = max_iter
+        self.max_iter = self.config.nepoch
         self.train_source_loader, self.train_target_loader, self.test_target_loader = dataloaders
         self.meta_loader = None
 
         self.save_path = self.config.save_path
         self.meta_m = self.config.meta_m
 
-        self.lr_scheduler = INVScheduler(
-            gamma=self.config.gamma, decay_rate=self.config.decay_rate, init_lr=self.config.init_lr)
-        self.vis = Visualize(port=8097, env=self.config.exp)
+        # self.lr_scheduler = INVScheduler(
+        #     gamma=self.config.gamma, decay_rate=self.config.decay_rate, init_lr=self.config.init_lr)
+        # self.vis = Visualize(port=8097, env=self.config.exp)
         self.iter_num = 0
         # self.a = torch.randn(128, 1024).cuda()
 
     def train(self):
         self.pprint("Start train...")
-        iter_num = 0
-        epoch = 0
         stop = 0
         mxacc = 0
         best_res = {}
-        while True:
+        for epoch in range(self.max_iter):
             self.model_old.load_state_dict(self.model.state_dict())
             self.gnet.train()
             self.model_old.train()
             self.model.train()
 
+            lr = self.config.init_lr / math.pow((1 + 10 * epoch / self.max_iter), .75)
+            print(f'lr: {lr}')
+            # for item in self.param_groups:
+            #     item['lr'] *= lr
+            # print(self.param_groups)
+            self.optimizer_m = torch.optim.SGD([
+                {'params': self.model.featurizer.parameters()},
+                {'params': self.model.bottleneck_layer.parameters(), 'lr': lr},
+                {'params': self.model.classifier_layer.parameters(), 'lr': lr}
+            ], lr=lr/10, momentum=self.config.momentum,
+                                           weight_decay=self.config.weight_decay)
+
             # update main model
             cls_loss = 0
+            lambd = 2 / (1 + math.exp(-10 * (epoch) / self.max_iter)) - 1
             cls_loss, gloss = self.update_main_model(
-                self.train_source_loader, self.train_target_loader)
+                self.train_source_loader, self.train_target_loader, lambd)
 
             # update gnet
             # construct meta_loader from target_loader before each epoch
             diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = 0, 0, 0, 0, 0
-            if epoch > -1:
+            if epoch > -1 and self.config.mu > 0:
                 self.load_meta_data()
                 diff, g_loss_pre, g_loss_post, mar_loss, mar_loss2 = self.update_gnet(
                     self.meta_source, self.meta_loader)
 
-            self.vis.plot_line([mar_loss, mar_loss2], epoch,
-                               title="MMD", legend=["old", "new"])
-            self.vis.plot_line([g_loss_pre, g_loss_post],
-                               epoch, title="GNet", legend=["old", "new"])
+            # self.vis.plot_line([mar_loss, mar_loss2], epoch,
+            #                    title="MMD", legend=["old", "new"])
+            # self.vis.plot_line([g_loss_pre, g_loss_post],
+            #                    epoch, title="GNet", legend=["old", "new"])
 
             stop += 1
             calcf1 = True if self.config.dataset.lower(
@@ -108,11 +120,7 @@ class L2MTrainer(object):
                     f"[Epoch:{epoch:02d}]: cls_loss: {cls_loss:.5f}, g_loss: {diff:.10f}, mxf1: {mxacc:.4f}")
                 self.pprint(
                     f"P: {ret['p']:.4f}, R: {ret['r']:.4f}, f1: {ret['f1']:.4f}, acc: {ret['accuracy']:.4f}, auc: {ret['auc']:.4f}")
-            epoch += 1
 
-            if iter_num >= self.max_iter:
-                self.pprint("finish train")
-                break
             if stop >= self.config.early_stop:
                 self.pprint("=================Early stop!!")
                 break
@@ -124,7 +132,7 @@ class L2MTrainer(object):
             self.pprint(f"acc: {best_res['accuracy']:.4f}")
         self.pprint("Train is finished!")
 
-    def update_main_model(self, src_train_loader, tar_train_loader):
+    def update_main_model(self, src_train_loader, tar_train_loader, lambd):
         """Update the main model (feature learning)
 
         Args:
@@ -142,8 +150,8 @@ class L2MTrainer(object):
             if inputs_source.size(0) != inputs_target.size(0):
                 continue
 
-            self.optimizer_m, _ = self.lr_scheduler.next_optimizer(
-                self.group_ratios, self.optimizer_m, self.iter_num / 5)
+            # self.optimizer_m, _ = self.lr_scheduler.next_optimizer(
+            #     self.group_ratios, self.optimizer_m, self.iter_num / 5)
             inputs_source, inputs_target, labels_source = inputs_source.cuda(
             ), inputs_target.cuda(), labels_source.cuda(),
             inputs = torch.cat((inputs_source, inputs_target), dim=0)
@@ -151,10 +159,8 @@ class L2MTrainer(object):
                 inputs, labels_source)
             m_feat = feat
             gloss = self.gnet(m_feat).mean()
-            # gloss = torch.tensor(0)
-            total_loss = classifier_loss + self.config.lamb * mar_loss + self.config.mu * gloss
-            # total_loss = classifier_loss
-            # total_loss = classifier_loss + self.config.lamb * mar_loss
+            # total_loss = classifier_loss + lambd * 0.3 * gloss
+            total_loss = classifier_loss + lambd * 0.3 * cond_loss
 
             self.optimizer_m.zero_grad()
             total_loss.backward()
@@ -217,7 +223,7 @@ class L2MTrainer(object):
     def load_meta_data(self):
         kwargs = {'num_workers': 4, 'pin_memory': True}
         train_val_split = -1
-        set_random(self.config.seed * 2)
+        # set_random(self.config.seed * 2)
         self.meta_source_loader = data_loader.load_testing(
             self.config.data_path, self.config.src, self.config.batch_size, kwargs)
         self.train_source_loader = data_loader.load_training(
@@ -384,22 +390,7 @@ def get_grad(model):
             grad_phi.append(v.grad)
     return grad_phi
 
-
-class INVScheduler(object):
-    def __init__(self, gamma, decay_rate, init_lr=0.001):
-        self.gamma = gamma
-        self.decay_rate = decay_rate
-        self.init_lr = init_lr
-
-    def next_optimizer(self, group_ratios, optimizer, num_iter):
-        lr = self.init_lr * (1 + self.gamma * num_iter)**(-self.decay_rate)
-        i = 0
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr * group_ratios[i]
-            i += 1
-        return optimizer, lr
-
-
+ 
 def generate_metadata(m, loader):
     targetimgs = loader.dataset.imgs
     start_idx = []

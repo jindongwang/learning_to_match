@@ -53,6 +53,8 @@ class L2M(nn.Module):
                 {"params": self.domain_classifier.parameters(), "lr": 1})
             self.parameter_list.append(
                 {"params": self.domain_classifier_class.parameters(), "lr": 1})
+        else:
+            self.mmd = mmd.MMD_loss(class_num=self.n_class)
 
     def forward(self, inputs, label_src=None, compute_ada_loss=True):
         """Forward func
@@ -86,10 +88,10 @@ class L2M(nn.Module):
             else:
                 fea_src, fea_tar = features[:label_src.size(0)], features[label_src.size(0):]
                 # compute mmd loss
-                loss_mar = mmd.marginal(fea_src, fea_tar)
+                loss_mar = self.mmd.marginal_mmd(fea_src, fea_tar)
 
                 # compute conditional mmd loss
-                loss_cond = mmd.conditional(fea_src, fea_tar, label_src, out_prob[label_src.size(0):], classnum=self.n_class)
+                loss_cond = self.mmd.conditional_mmd(fea_src, fea_tar, label_src, out_prob[label_src.size(0):])
             
         return features, out_logits, preds, loss_cls, loss_mar, loss_cond
 
