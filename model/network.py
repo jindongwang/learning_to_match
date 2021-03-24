@@ -23,20 +23,8 @@ class L2MNet(nn.Module):
         self.use_adv = use_adv
         self.n_class = class_num
         self.featurizer = backbone.network_dict[base_net]()
-        self.bottleneck_layer = nn.Sequential(*[nn.Linear(self.featurizer.output_num(), bottleneck_dim),
-                                                nn.BatchNorm1d(bottleneck_dim),
-                                                nn.ReLU(),
-                                                nn.Dropout(0.5, inplace=False)])
+        self.bottleneck_layer = nn.Linear(self.featurizer.output_num(), bottleneck_dim)
         self.classifier_layer = nn.Linear(bottleneck_dim, class_num)
-
-        self.bottleneck_layer[0].weight.data.normal_(0, 0.005)
-        self.bottleneck_layer[0].bias.data.fill_(0.1)
-        self.classifier_layer.weight.data.normal_(0, 0.01)
-        self.classifier_layer.bias.data.fill_(0.0)
-
-        self.parameter_list = [{"params": self.featurizer.parameters(), "lr": 0.1},
-                               {"params": self.bottleneck_layer.parameters(), "lr": 1},
-                               {"params": self.classifier_layer.parameters(), "lr": 1}]
 
         if self.use_adv:
             self.domain_classifier = MLP(
@@ -44,11 +32,6 @@ class L2MNet(nn.Module):
             
             self.domain_classifier_class = nn.ModuleList([MLP(
                 bottleneck_dim, [bottleneck_dim, width], 2, drop_out=.5) for _ in range(class_num)])
-
-            self.parameter_list.append(
-                {"params": self.domain_classifier.parameters(), "lr": 1})
-            self.parameter_list.append(
-                {"params": self.domain_classifier_class.parameters(), "lr": 1})
         else:
             self.mmd = mmd.MMD_loss(class_num=self.n_class)
 
@@ -108,11 +91,6 @@ class L2MNet(nn.Module):
         output_prob = F.softmax(output_logit)
         probs, preds = torch.max(output_prob, 1)
         return probs, output_logit, preds
-
-    def get_parameter_list(self):
-        if isinstance(self, torch.nn.DataParallel) or isinstance(self, torch.nn.parallel.DistributedDataParallel):
-            return self.module.parameter_list
-        return self.parameter_list
 
     def dann(self, feat_grl):
         """Compute DANN loss
