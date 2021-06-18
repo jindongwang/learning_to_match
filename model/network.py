@@ -20,7 +20,7 @@ class L2M(nn.Module):
             class_num (int, optional): number of classes. Defaults to 31.
             use_adv (bool, optional): use adversarial training or not. Defaults to True.
         """
-        super(L2M, self).__init__()
+        super(L2MNet, self).__init__()
         self.use_adv = use_adv
         self.n_class = class_num
         self.featurizer = backbone.get_backbone(base_net)
