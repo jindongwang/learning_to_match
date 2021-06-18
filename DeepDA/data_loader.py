@@ -1,5 +1,7 @@
 from torchvision import datasets, transforms
 import torch
+from PIL import Image
+from skimage import io
 
 def load_data(data_folder, batch_size, train, num_workers=0, **kwargs):
     transform = {
@@ -67,3 +69,33 @@ class InfiniteDataLoader:
 
     def __len__(self):
         return 0 # Always return 0
+
+# Dataloader class for meta data
+class MetaDataset(torch.utils.data.Dataset):
+    def __init__(self, meta_info) -> None:
+        self.meta_info = meta_info
+        self.transform = transforms.Compose(
+            [transforms.Resize(256),
+             transforms.CenterCrop(224),
+             transforms.RandomHorizontalFlip(),
+             transforms.ToTensor(),
+             transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                  std=[0.229, 0.224, 0.225])])
+
+    def __getitem__(self, index: int):
+        data = io.imread(self.meta_info[index][0])
+        data = Image.fromarray(data)
+        if data.getbands()[0] == 'L' or len(data.getbands()) > 3:
+            data = data.convert('RGB')
+        data = self.transform(data)
+        label = self.meta_info[index][1]
+        return data, label
+
+    def __len__(self):
+        return len(self.meta_info)
+
+
+def load_metadata(meta_dataset, batch_size=8):
+    meta_loader = torch.utils.data.DataLoader(
+        meta_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    return meta_loader

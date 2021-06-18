@@ -1,4 +1,5 @@
 import configargparse
+from numpy.core.fromnumeric import argsort
 import data_loader
 import os
 import torch
@@ -7,6 +8,7 @@ import utils
 from utils import str2bool, metric
 import numpy as np
 import random
+import copy
 import pretty_errors
 
 def get_parser():
@@ -26,9 +28,9 @@ def get_parser():
     parser.add_argument('--use_bottleneck', type=str2bool, default=True)
 
     # data loading related
-    parser.add_argument('--data_dir', type=str, default='/data/jindwang/covid_folder')
-    parser.add_argument('--src_domain', type=str, default='pneumonia')
-    parser.add_argument('--tgt_domain', type=str, default='covid')
+    parser.add_argument('--data_dir', type=str, default='/data/jindwang/OfficeHome')
+    parser.add_argument('--src_domain', type=str, default='Art')
+    parser.add_argument('--tgt_domain', type=str, default='Clipart')
     
     # training related
     parser.add_argument('--batch_size', type=int, default=16)
@@ -53,6 +55,11 @@ def get_parser():
 
     # metric related
     parser.add_argument('--metric', type=str, default='acc')
+
+    # l2m related
+    parser.add_argument('--gbatch', type=int, default=16)
+    parser.add_argument('--meta_m',type=int, default=16)
+    parser.add_argument('--glr', type=float, default=.0001)
     return parser
 
 def set_random_seed(seed=0):
@@ -137,16 +144,22 @@ def train(source_loader, target_train_loader, target_test_loader, model, optimiz
     best_all = {}
     stop = 0
     log = []
+    optimizer_g = torch.optim.SGD(model.adapt_loss.loss_func.net.parameters(), lr=args.glr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=False)
+    model_old = args.model_old
     for e in range(1, args.n_epoch+1):
+        model_old.load_state_dict(model.state_dict())
+        model_old.train()
         model.train()
         train_loss_clf = utils.AverageMeter()
         train_loss_transfer = utils.AverageMeter()
         train_loss_total = utils.AverageMeter()
         model.epoch_based_processing(n_batch)
-        
+        model_old.epoch_based_processing(n_batch)
+
         if max(len_target_loader, len_source_loader) != 0:
             iter_source, iter_target = iter(source_loader), iter(target_train_loader)
         
+        # update main model
         for _ in range(n_batch):
             data_source, label_source = next(iter_source) # .next()
             data_target, _ = next(iter_target) # .next()
@@ -166,11 +179,38 @@ def train(source_loader, target_train_loader, target_test_loader, model, optimiz
             train_loss_clf.update(clf_loss.item())
             train_loss_transfer.update(transfer_loss.item())
             train_loss_total.update(loss.item())
+
+        gloss_total = utils.AverageMeter()
+        folder_src = os.path.join(args.data_dir, args.src_domain)
+        folder_tgt = os.path.join(args.data_dir, args.tgt_domain)
+        source_loader1, n_class = data_loader.load_data(
+            folder_src, args.batch_size, infinite_data_loader=False, train=True, num_workers=args.num_workers)
+        target_train_loader1, _ = data_loader.load_data(
+            folder_tgt, args.batch_size, infinite_data_loader=False, train=False, num_workers=args.num_workers)
+        # update gnet
+        meta_src = generate_metadata_soft(
+            args.meta_m, source_loader1, model, args.gbatch, select_mode='top', source=True)
+        meta_tar = generate_metadata_soft(
+            args.meta_m, target_train_loader1, model, args.gbatch, select_mode='top')
+        for _ in range(2):
+            for datas, datat in zip(meta_src, meta_tar):
+                (xs, ys), (xt, yt) = datas, datat
+                xs, ys, xt, yt = xs.cuda(), ys.cuda(), xt.cuda(), yt.cuda()
+                feat_old = model_old.get_features(torch.cat((xs, xt), dim=0))
+                feat_new = model.get_features(torch.cat((xs, xt), dim=0))
+                loss_old = model_old.adapt_loss(feat_old[:feat_old.size(0) // 2], feat_old[feat_old.size(0) // 2:])
+                loss_new = model.adapt_loss(feat_old[:feat_new.size(0) // 2], feat_old[feat_new.size(0) // 2:])
+                gloss = gnet_diff(loss_old, loss_new)
+                optimizer_g.zero_grad()
+                gloss.backward()
+                optimizer_g.step()
+                gloss_total.update(gloss.item())
+
             
         log.append([train_loss_clf.avg, train_loss_transfer.avg, train_loss_total.avg])
         
-        info = 'Epoch: [{:2d}/{}], cls_loss: {:.4f}, transfer_loss: {:.4f}, total_Loss: {:.4f}'.format(
-                        e, args.n_epoch, train_loss_clf.avg, train_loss_transfer.avg, train_loss_total.avg)
+        info = 'Epoch: [{:2d}/{}], cls_loss: {:.4f}, transfer_loss: {:.4f}, total_Loss: {:.4f}, gloss: {:.6f}'.format(
+                        e, args.n_epoch, train_loss_clf.avg, train_loss_transfer.avg, train_loss_total.avg, gloss_total.avg)
         # Test
         stop += 1
         test_res = test(model, target_test_loader, calc_f1=True if args.metric == 'f1' else False)
@@ -186,6 +226,91 @@ def train(source_loader, target_train_loader, target_test_loader, model, optimiz
         print(info)
     print('Transfer result: ' + str(best_all))
 
+def gnet_diff(g_loss_pre, g_loss_post):
+    """Difference between previous and current gnet losses: tanh(g_loss_pre, g_loss_post)
+    May use different functions such as subtraction, log, or crossentropy...
+
+    Args:
+        g_loss_pre (float): previous gnet loss
+        g_loss_post (float): current gnet loss
+
+    Returns:
+        diff (float): difference
+    """
+    diff = g_loss_post - g_loss_pre
+    # diff = g_loss_post - g_loss_pre
+    # diff = torch.tanh(g_loss_post - g_loss_pre)
+    # diff = torch.tanh(torch.nn.CrossEntropyLoss()(g_loss_pre, g_loss_post))
+    # diff = torch.log(g_loss_pre) - torch.log(g_loss_post)
+    return diff
+
+
+    
+
+def generate_metadata_soft(m, loader, model, batch_size, select_mode='top', source=False):
+        """Generate meta data with soft labels
+
+        Args:
+            m (int): # meta data for each class
+            loader (dataloader): data loader
+            model (model): model
+            select_mode (str): "random" for random sampling or "top" for sampling top m
+            source (bool): denotes whether the loader is for source (True) or not (False)
+
+        Returns:
+            loader: metaloader
+        """
+        test_imgs = loader.dataset.imgs
+        cls_idx = loader.dataset.class_to_idx
+        if not source:
+            prob, softlabels, _ = inference(model, loader)
+            prob, softlabels = prob.cpu().detach().numpy(), softlabels.cpu().detach().numpy()
+        else:  # source domain, then soft labels are groundtruth, prob is all 1
+            softlabels = np.array([int(item[1]) for item in test_imgs])
+            prob = np.array([1] * len(softlabels))
+        test_imgs_path = [item[0] for item in test_imgs]
+        test_imgs_index = np.arange(len(test_imgs_path))
+        test_imgs_all = np.hstack((
+            test_imgs_index.reshape((len(test_imgs_index), 1)),
+            softlabels.reshape((len(softlabels), 1)),
+            prob.reshape((len(softlabels), 1))))
+        threshold = 0.8
+        confident_imgs = test_imgs_all[prob >= threshold]
+        rest_imgs = test_imgs_all[prob < threshold]
+        imgs_select_all = []
+
+        # find the m samples for each class to contruct meta loader
+        for cls in loader.dataset.classes:
+            cls = int(cls_idx[cls])
+            imgs_cls = confident_imgs[confident_imgs[:, 1] == cls]
+            if len(imgs_cls) >= m:
+                if select_mode == 'random':
+                    np.random.shuffle(imgs_cls)
+                    imgs_select_cls = imgs_cls[:m]
+                elif select_mode == 'top':
+                    probs_conf = imgs_cls[:, 2]
+                    ind = probs_conf.argsort()
+                    imgs_select_cls = imgs_cls[ind[::-1]]
+                    imgs_select_cls = imgs_select_cls[:m]
+            elif len(imgs_cls) > 0:
+                imgs_select_cls = imgs_cls
+                np.random.shuffle(rest_imgs)
+                rest = rest_imgs[:m - len(imgs_cls)]
+                imgs_select_cls = np.vstack((imgs_select_cls, rest))
+                imgs_select_cls[:, 1] = cls
+            else:
+                probs_conf = rest_imgs[:, 2]
+                ind = probs_conf.argsort()
+                imgs_select_cls = rest_imgs[ind]
+                imgs_select_cls = imgs_select_cls[:m]
+                imgs_select_cls[:, 1] = cls
+            imgs_select = [(test_imgs_path[int(item[0])], int(item[1]))
+                           for item in imgs_select_cls]
+            imgs_select_all.extend(imgs_select)
+        meta_dataset = data_loader.MetaDataset(imgs_select_all)
+        meta_loader = data_loader.load_metadata(meta_dataset, batch_size=batch_size)
+        return meta_loader
+
 def main():
     parser = get_parser()
     args = parser.parse_args()
@@ -199,6 +324,7 @@ def main():
     else:
         setattr(args, "max_iter", args.n_epoch * args.n_iter_per_epoch)
     model = get_model(args)
+    args.model_old = get_model(args)
     optimizer = get_optimizer(model, args)
     
     if args.lr_scheduler:
@@ -206,7 +332,6 @@ def main():
     else:
         scheduler = None
     train(source_loader, target_train_loader, target_test_loader, model, optimizer, scheduler, args)
-    
 
 if __name__ == "__main__":
     main()

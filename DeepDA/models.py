@@ -74,6 +74,12 @@ class TransferNet(nn.Module):
         
         transfer_loss = self.adapt_loss(source, target, **kwargs)
         return clf_loss, transfer_loss
+
+    def get_features(self, x):
+        x = self.base_network(x)
+        if self.use_bottleneck:
+            x = self.bottleneck_layer(x)
+        return x
     
     def get_parameters(self, initial_lr=1.0):
         params = [
@@ -96,10 +102,10 @@ class TransferNet(nn.Module):
             params.append(
                 {'params': self.adapt_loss.loss_func.local_classifiers.parameters(), 'lr': 1.0 * initial_lr}
             )
-        elif self.transfer_loss == 'l2m':
-            params.append(
-                {'params': self.adapt_loss.loss_func.net.parameters(), 'lr': 1.0 * initial_lr}
-            )
+        # elif self.transfer_loss == 'l2m':
+        #     params.append(
+        #         {'params': self.adapt_loss.loss_func.net.parameters(), 'lr': 1.0 * initial_lr}
+        #     )
         return params
 
     def predict(self, x):
