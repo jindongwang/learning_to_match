@@ -68,32 +68,3 @@ Configurations:
 Other configurations can be found at `train.py`.
 
 
-## Evaluation
-
-To evaluate the model, run the following command. `--model_file` denotes the model trained on dataset Office-Home.
-
-```eval
-CUDA_VISIBLE_DEVICES=0 python eval.py --model_file Art_Clipart.mdl  --dataset Office-Home --root_path ./data/OfficeHome/ --source_dir Art --test_dir Clipart
-```
-
-## Pre-trained Models
-
-For simplicity, we provide a pre-trained model for task `Art-Clipart` on Office-Home dataset here: [Art-Clipart pretrained model](https://www.dropbox.com/s/uggiamwwlrazcy6/Art_Clipart.mdl?dl=0). This model can be used directly for evaluation.
-
-
-## Results
-
-The results of L2M are as follows.
-
-* The classification accuracy (%) on the Office-Home dataset for UDA (ResNet-50):  
-![image](assets/officehome.png)
-
-* The classification accuracy (%) on the ImageCLEF-DA and VisDA-17 datasets for UDA (ResNet-50):  
-![image](assets/imageclef_visda.png)
-
-* The classification accuracy (%) on the Office-31 dataset for UDA (ResNet-50):  
-![image](assets/office31.png)
-
-* The classification accuracy (%) on the COVID-19 chest X-ray image adaptation (Pneumonia &rarr; COVID-19, ResNet-18):  
-![image](assets/covid.png)
-

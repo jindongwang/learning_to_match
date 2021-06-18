@@ -3,15 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils import mmd
-from model.grl import GradReverse
-from model.mlp import MLP
+from model.grl import Discriminator, AdversarialLoss
 import model.backbone as backbone
 
 '''
 L2M network.
 '''
 class L2M(nn.Module):
-    def __init__(self, base_net='ResNet50', bottleneck_dim=2048, width=256, class_num=31, use_adv=True):
+    def __init__(self, base_net='resnet50', bottleneck_dim=2048, width=256, class_num=31, use_adv=True):
         """Init func
 
         Args:
@@ -24,35 +23,22 @@ class L2M(nn.Module):
         super(L2M, self).__init__()
         self.use_adv = use_adv
         self.n_class = class_num
-        self.featurizer = backbone.network_dict[base_net]()
+        self.featurizer = backbone.get_backbone(base_net)
         self.bottleneck_layer = nn.Sequential(*[nn.Linear(self.featurizer.output_num(), bottleneck_dim),
-                                                nn.BatchNorm1d(bottleneck_dim),
-                                                nn.ReLU(),
-                                                nn.Dropout(0.5, inplace=False)])
-        self.classifier_layer = nn.Linear(bottleneck_dim, class_num)
+                                                nn.ReLU()])
+        self.classifier_layer = nn.Linear(bottleneck_dim, self.n_class)
 
-        self.bottleneck_layer[0].weight.data.normal_(0, 0.005)
-        self.bottleneck_layer[0].bias.data.fill_(0.1)
-        self.classifier_layer.weight.data.normal_(0, 0.01)
-        self.classifier_layer.bias.data.fill_(0.0)
-
-        self.parameter_list = [{"params": self.featurizer.parameters(), "lr": 0.1},
-                               {"params": self.bottleneck_layer.parameters(), "lr": 1},
-                               {"params": self.classifier_layer.parameters(), "lr": 1}]
-
+        self.parameter_list = self.get_parameters()
         if self.use_adv:
             # DANN: add DANN, make L2M not only class-invariant (as conditional loss) but also domain invariant (as marginal loss)
-            self.domain_classifier = MLP(
-                bottleneck_dim, [bottleneck_dim, width], 2, drop_out=.5)
+            self.domain_classifier = Discriminator(input_dim=bottleneck_dim)
             
-            # Class-conditional DANN
-            self.domain_classifier_class = nn.ModuleList([MLP(
-                bottleneck_dim, [bottleneck_dim, width], 2, drop_out=.5) for _ in range(class_num)])
 
             self.parameter_list.append(
-                {"params": self.domain_classifier.parameters(), "lr": 1})
-            self.parameter_list.append(
-                {"params": self.domain_classifier_class.parameters(), "lr": 1})
+                {'params': self.domain_classifier.parameters(), 'lr': 1.0 * 1}
+            )
+            
+            self.adv_loss = AdversarialLoss(domain_classifier=self.domain_classifier)
         else:
             self.mmd = mmd.MMD_loss(class_num=self.n_class)
 
@@ -76,14 +62,10 @@ class L2M(nn.Module):
         loss_mar, loss_cond = None, None
         if compute_ada_loss:
             if self.use_adv:
-                feat_grl = GradReverse.apply(features, 1)
                 # compute DANN loss
-                loss_mar = self.dann(feat_grl)
                 
-                # compute class-wise DANN loss
-                pred_src, pred_tar = preds[:label_src.size(0)], preds[label_src.size(0):]
-                feat_src, feat_tar = feat_grl[: pred_src.size(0)], feat_grl[pred_src.size(0) : ]
-                loss_cond, _ = self.adv_class(feat_src, feat_tar, pred_src, pred_tar)
+                loss_mar = self.adv_loss(features[:label_src.size(0)], features[label_src.size(0):])
+                loss_cond = 0
 
             else:
                 fea_src, fea_tar = features[:label_src.size(0)], features[label_src.size(0):]
@@ -113,54 +95,28 @@ class L2M(nn.Module):
         probs, preds = torch.max(output_prob, 1)
         return probs, output_logit, preds
 
-    def get_parameter_list(self):
-        if isinstance(self, torch.nn.DataParallel) or isinstance(self, torch.nn.parallel.DistributedDataParallel):
-            return self.module.parameter_list
-        return self.parameter_list
-
-    def dann(self, feat_grl):
-        """Compute DANN loss
-
-        Args:
-            feat_grl (tensor): input features after GRL apply
-
-        Returns:
-            float: DANN loss
-        """
-        domain_output = torch.sigmoid(self.domain_classifier(feat_grl))
-        len_src, len_tar = feat_grl.size(0) // 2, feat_grl.size(0) // 2
-        sdomain_label = torch.zeros(len_src).cuda().long()
-        tdomain_label = torch.ones(len_tar).cuda().long()
-        domain_label = torch.cat([sdomain_label, tdomain_label])
-        adv_loss = F.cross_entropy(domain_output, domain_label)
-        return adv_loss
-
-    def adv_class(self, feat_s, feat_t, label_s, label_t):
-        """Compute class-wise DANN loss
-
-        Args:
-            feat_s (matrix): input source features after GRL apply
-            feat_t (matrix): input target features after GRL apply
-            label_s (1d array): source labels
-            label_t (1d array): target labels
-
-        Returns:
-            tuple: Loss and loss list for each class
-        """
-        losses = []
-        for label in torch.unique(label_s):
-            feat_src, feat_tar = feat_s[label_s == label], feat_t[label_t == label]
-            if feat_src.size(0) == 0 or feat_tar.size(0) == 0:
-                continue
-            feat_i = torch.cat([feat_src, feat_tar], dim=0)
-            domain_out_i = torch.sigmoid(self.domain_classifier_class[label](feat_i))
-            sdomain_label = torch.zeros(feat_src.size(0)).cuda().long()
-            tdomain_label = torch.ones(feat_tar.size(0)).cuda().long()
-            domain_label = torch.cat([sdomain_label, tdomain_label])
-            loss_adv_i = F.cross_entropy(domain_out_i, domain_label)
-            losses.append(loss_adv_i)
-        loss_avg = torch.tensor(losses, device='cuda').mean()
-        return loss_avg, losses
+    def get_parameters(self, initial_lr=1.0):
+        params = [
+            {'params': self.featurizer.parameters(), 'lr': 0.1 * initial_lr},
+            {'params': self.classifier_layer.parameters(), 'lr': 1.0 * initial_lr},
+        ]
+        if self.use_bottleneck:
+            params.append(
+                {'params': self.bottleneck_layer.parameters(), 'lr': 1.0 * initial_lr}
+            )
+        # Loss-dependent
+        # if self.transfer_loss == "adv":
+        #     params.append(
+        #         {'params': self.adapt_loss.loss_func.domain_classifier.parameters(), 'lr': 1.0 * initial_lr}
+        #     )
+        # elif self.transfer_loss == "daan":
+        #     params.append(
+        #         {'params': self.adapt_loss.loss_func.domain_classifier.parameters(), 'lr': 1.0 * initial_lr}
+        #     )
+        #     params.append(
+        #         {'params': self.adapt_loss.loss_func.local_classifiers.parameters(), 'lr': 1.0 * initial_lr}
+        #     )
+        return params
 
 if __name__ == '__main__':
     l2m_model = L2M()

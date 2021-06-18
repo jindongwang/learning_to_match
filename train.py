@@ -104,12 +104,12 @@ def get_data_config(dataset_name):
 def init_gnet(width, class_num):
     # gnet = GNetGram(2 * args.meta_m ** 2, [256, 128], 1,
     #                 use_set=True, drop_out=.5, mono=False, init_net=True)
-    # gnet = GNetGram(args.gbatch ** 2, [128, 64], 1,
-    #                 use_set=True, drop_out=.5, mono=False, init_net=True)
+    gnet = GNetGram(args.gbatch ** 2, [128, 64], 1,
+                    use_set=True, drop_out=.5, mono=False, init_net=True)
     # gnet = GNet(input_gnet, [512, 256], 1, use_set=True,
     #             drop_out=.5, mono=False, init_net=True)
-    gnet = GNetTransformer(32 * 32, [128, 64], 1,
-                    use_set=True, drop_out=.5, mono=False, init_net=True)
+    # gnet = GNetTransformer(32 * 32, [128, 64], 1,
+    #                 use_set=True, drop_out=.5, mono=False, init_net=True)
     return gnet
 
 

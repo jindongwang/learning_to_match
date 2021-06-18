@@ -1,40 +1,8 @@
-'''
-Gradient reversal layer. Reference:
-Ganin et al. Unsupervised domain adaptation by backpropagation. ICML 2015.
-'''
-
 import torch
 import torch.nn as nn
-
-# For pytorch version > 1.0
-# Usage:
-# b = GradReverse.apply(a, 1) # 1 is the lambda value, you are free to set it
-class GradReverse(torch.autograd.Function):
-
-    @staticmethod
-    def forward(ctx, x, alpha):
-        ctx.alpha = alpha
-        return x.view_as(x)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        output = grad_output.neg() * ctx.alpha
-        return output, None
-
-# For pytorch version 1.0
-# Usage:
-# grl = GradientReverseLayer(1)  # 1 is the lambda value, you are free to set it
-# b = grl(a)
-class GradientReverseLayer(torch.autograd.Function):
-    def __init__(self, lambd=1):
-        self.lambd = lambd
-
-    def forward(self, input):
-        output = input * 1.0
-        return output
-
-    def backward(self, grad_output):
-        return -self.lambd * grad_output
+from torch.autograd import Function
+import torch.nn.functional as F
+import numpy as np
 
 class LambdaSheduler(nn.Module):
     def __init__(self, gamma=1.0, max_iter=1000, **kwargs):
@@ -51,24 +19,10 @@ class LambdaSheduler(nn.Module):
     def step(self):
         self.curr_iter = min(self.curr_iter + 1, self.max_iter)
 
-class ReverseLayerF(Function):
-    @staticmethod
-    def forward(ctx, x, alpha):
-        ctx.alpha = alpha
-        return x.view_as(x)
-    
-    @staticmethod
-    def backward(ctx, grad_output):
-        output = grad_output.neg() * ctx.alpha
-        return output, None
-
 class AdversarialLoss(LambdaSheduler):
-    def __init__(self, gamma=1.0, max_iter=1000, domain_classifier=None, **kwargs):
+    def __init__(self, gamma=1.0, max_iter=1000, **kwargs):
         super(AdversarialLoss, self).__init__(gamma=gamma, max_iter=max_iter, **kwargs)
-        if domain_classifier:
-            self.domain_classifier = domain_classifier
-        else:
-            self.domain_classifier = Discriminator()
+        self.domain_classifier = Discriminator()
     
     def forward(self, source, target):
         lamb = self.lamb()
@@ -89,6 +43,18 @@ class AdversarialLoss(LambdaSheduler):
         loss_fn = nn.BCELoss()
         loss_adv = loss_fn(domain_pred, domain_label.float().to(device))
         return loss_adv
+    
+
+class ReverseLayerF(Function):
+    @staticmethod
+    def forward(ctx, x, alpha):
+        ctx.alpha = alpha
+        return x.view_as(x)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        output = grad_output.neg() * ctx.alpha
+        return output, None
 
 class Discriminator(nn.Module):
     def __init__(self, input_dim=256, hidden_dim=256):
