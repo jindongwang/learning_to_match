@@ -10,6 +10,7 @@ import numpy as np
 import random
 import copy
 import pretty_errors
+from loss_funcs import MMDLoss, GNetGram
 
 def get_parser():
     """Get default arguments."""
@@ -132,19 +133,30 @@ def test(model, loader, calc_f1=False):
     return ret
 
 def train(source_loader, target_train_loader, target_test_loader, model, optimizer, lr_scheduler, args):
+    kwargs = {}
+    kwargs['n_input'] = 16 * 16
+    kwargs['n_hiddens'] = [128, 64]
+    kwargs['n_output'] = 1
+    kwargs['use_set'] = True
+    kwargs['drop_out'] = 0
+    kwargs['mono'] = True
+    kwargs['init_net'] = True
+    gnet = GNetGram(**kwargs)
+
     len_source_loader = len(source_loader)
     len_target_loader = len(target_train_loader)
     n_batch = min(len_source_loader, len_target_loader)
     if n_batch == 0:
-        n_batch = args.n_iter_per_epoch 
-    
+        n_batch = args.n_iter_per_epoch
     iter_source, iter_target = iter(source_loader), iter(target_train_loader)
 
     best_acc = 0
     best_all = {}
     stop = 0
     log = []
-    optimizer_g = torch.optim.SGD(model.adapt_loss.loss_func.net.parameters(), lr=args.glr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=False)
+    cls_criterion = torch.nn.CrossEntropyLoss()
+
+    optimizer_g = torch.optim.SGD(gnet.net.parameters(), lr=args.glr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=False)
     model_old = args.model_old
     for e in range(1, args.n_epoch+1):
         model_old.load_state_dict(model.state_dict())
@@ -166,7 +178,7 @@ def train(source_loader, target_train_loader, target_test_loader, model, optimiz
             data_source, label_source = data_source.to(
                 args.device), label_source.to(args.device)
             data_target = data_target.to(args.device)
-            
+
             clf_loss, transfer_loss = model(data_source, data_target, label_source)
             loss = clf_loss + args.transfer_loss_weight * transfer_loss
             
@@ -188,23 +200,25 @@ def train(source_loader, target_train_loader, target_test_loader, model, optimiz
         target_train_loader1, _ = data_loader.load_data(
             folder_tgt, args.batch_size, infinite_data_loader=False, train=False, num_workers=args.num_workers)
         # update gnet
-        meta_src = generate_metadata_soft(
-            args.meta_m, source_loader1, model, args.gbatch, select_mode='top', source=True)
-        meta_tar = generate_metadata_soft(
-            args.meta_m, target_train_loader1, model, args.gbatch, select_mode='top')
-        for _ in range(2):
-            for datas, datat in zip(meta_src, meta_tar):
-                (xs, ys), (xt, yt) = datas, datat
-                xs, ys, xt, yt = xs.cuda(), ys.cuda(), xt.cuda(), yt.cuda()
-                feat_old = model_old.get_features(torch.cat((xs, xt), dim=0))
-                feat_new = model.get_features(torch.cat((xs, xt), dim=0))
-                loss_old = model_old.adapt_loss(feat_old[:feat_old.size(0) // 2], feat_old[feat_old.size(0) // 2:])
-                loss_new = model.adapt_loss(feat_old[:feat_new.size(0) // 2], feat_old[feat_new.size(0) // 2:])
-                gloss = gnet_diff(loss_old, loss_new)
-                optimizer_g.zero_grad()
-                gloss.backward()
-                optimizer_g.step()
-                gloss_total.update(gloss.item())
+
+        if e >= 0:
+            meta_src = generate_metadata_soft(
+                args.meta_m, source_loader1, model, args.gbatch, select_mode='top', source=True)
+            meta_tar = generate_metadata_soft(
+                args.meta_m, target_train_loader1, model, args.gbatch, select_mode='top')
+            for _ in range(1):
+                for datas, datat in zip(meta_src, meta_tar):
+                    (xs, ys), (xt, yt) = datas, datat
+                    xs, ys, xt, yt = xs.cuda(), ys.cuda(), xt.cuda(), yt.cuda()
+                    feat_old = model_old.get_features(torch.cat((xs, xt), dim=0))
+                    feat_new = model.get_features(torch.cat((xs, xt), dim=0))
+                    loss_old = gnet(feat_old[:feat_old.size(0) // 2], feat_old[feat_old.size(0) // 2:])
+                    loss_new = gnet(feat_old[:feat_new.size(0) // 2], feat_old[feat_new.size(0) // 2:])
+                    gloss = gnet_diff(loss_old, loss_new)
+                    optimizer_g.zero_grad()
+                    gloss.backward()
+                    optimizer_g.step()
+                    gloss_total.update(gloss.item())
 
             
         log.append([train_loss_clf.avg, train_loss_transfer.avg, train_loss_total.avg])

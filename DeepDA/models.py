@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from loss_funcs.mmd import MMDLoss
 from transfer_losses import TransferLoss
 import backbones
 
@@ -28,18 +29,8 @@ class TransferNet(nn.Module):
             "max_iter": max_iter,
             "num_class": num_class
         }
-        if self.transfer_loss == 'l2m':
-            kwargs = {}
-            kwargs['n_input'] = 16 * 16
-            kwargs['n_hiddens'] = [128, 64]
-            kwargs['n_output'] = 1
-            kwargs['use_set'] = True
-            kwargs['drop_out'] = 0
-            kwargs['mono'] = False
-            kwargs['init_net'] = True
-            self.adapt_loss = TransferLoss(self.transfer_loss, **kwargs)
-        else:
-            self.adapt_loss = TransferLoss(**transfer_loss_args)
+        
+        self.adapt_loss = TransferLoss(**transfer_loss_args)
         self.criterion = torch.nn.CrossEntropyLoss()
 
     def forward(self, source, target, source_label):
@@ -62,16 +53,6 @@ class TransferNet(nn.Module):
             kwargs['source_logits'] = torch.nn.functional.softmax(source_clf, dim=1)
             target_clf = self.classifier_layer(target)
             kwargs['target_logits'] = torch.nn.functional.softmax(target_clf, dim=1)
-        # elif self.transfer_loss == 'l2m':
-            # kwargs['n_input'] = 32 * 32
-            # kwargs['n_hiddens'] = [128, 64]
-            # kwargs['n_output'] = 1
-            # kwargs['use_set'] = True
-            # kwargs['dropout'] = 0
-            # kwargs['mono'] = False
-            # kwargs['init_net'] = True
-            # n_input, n_hiddens, n_output, use_set=True, drop_out=0, mono=False, init_net=True
-        
         transfer_loss = self.adapt_loss(source, target, **kwargs)
         return clf_loss, transfer_loss
 
